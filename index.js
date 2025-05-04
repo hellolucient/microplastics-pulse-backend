@@ -230,10 +230,34 @@ async function processQueryAndSave(query) {
 app.post('/api/trigger-fetch', async (req, res) => {
   console.log('Manual fetch triggered via API.');
   const searchQueries = [
-    "microplastics human health",
-    "nanoplastics research",
-    "plastic pollution policy update"
-    // Add more queries as needed
+    "latest research microplastics human health site:nature.com OR site:sciencedirect.com",
+    "global microplastic pollution report 2025 site:who.int OR site:unep.org",
+    "microplastics ubiquity environment food chain site:nature.com",
+    "emerging health concerns microplastics 2025 site:thelancet.com OR site:nih.gov",
+    "policy innovation to prevent microplastic contamination 2025",
+    "how microplastics enter the human body ingestion inhalation dermal site:ncbi.nlm.nih.gov",
+    "bioaccumulation of microplastics in human organs site:sciencedirect.com",
+    "crossing blood brain barrier microplastics placenta gut brain site:nature.com",
+    "translocation of microplastics to brain or placenta site:cell.com",
+    "microplastics inflammation oxidative stress endocrine disruption site:ncbi.nlm.nih.gov",
+    "microplastics gut microbiome dysbiosis immunity site:gut.bmj.com OR site:nature.com",
+    "microplastics reproductive health fetal exposure site:thelancet.com",
+    "microplastics impact on brain neurological disorders site:sciencedirect.com",
+    "microplastics and chronic disease cancer diabetes cardiovascular site:who.int",
+    "microplastics linked to erectile dysfunction antibiotic resistance superbugs",
+    "food contamination microplastics seafood produce packaging site:efsa.europa.eu",
+    "airborne microplastics indoor exposure site:epa.gov OR site:pubmed.ncbi.nlm.nih.gov",
+    "textiles cosmetics furniture microplastic emissions site:echa.europa.eu",
+    "wellness industry microplastics awareness detox contradictions site:gwi.org",
+    "clean living vs microplastic reality wellness narrative site:mindbodygreen.com OR site:wellandgood.com",
+    "microplastics detox evidence probiotics antioxidants site:ncbi.nlm.nih.gov",
+    "individual microplastic exposure reduction tips 2025 site:cdc.gov OR site:who.int",
+    "new technologies microplastic removal blood purification 2025",
+    "probiotic and antioxidant strategies microplastic detox site:sciencedirect.com",
+    "wellness program standards to reduce microplastic exposure site:spaindustry.org",
+    "2025 microplastic research priorities wellness industry site:gwi.org OR site:nih.gov",
+    "call to action microplastics wellness sustainability site:globalwellnesssummit.com",
+    "research gaps in microplastic and human health site:thelancet.com OR site:who.int"
   ];
   let totalAdded = 0;
   let errorsOccurred = false;
@@ -256,7 +280,36 @@ app.post('/api/trigger-fetch', async (req, res) => {
 // TODO: Update cron job to call processQueryAndSave for each query
 // cron.schedule('0 */8 * * *', async () => { // Example: Run every 8 hours
 //   console.log('Running scheduled task: Fetching latest news...');
-//   const searchQueries = ["microplastics human health", "nanoplastics research"]; 
+//   const searchQueries = [
+//     "latest research microplastics human health site:nature.com OR site:sciencedirect.com",
+//     "global microplastic pollution report 2025 site:who.int OR site:unep.org",
+//     "microplastics ubiquity environment food chain site:nature.com",
+//     "emerging health concerns microplastics 2025 site:thelancet.com OR site:nih.gov",
+//     "policy innovation to prevent microplastic contamination 2025",
+//     "how microplastics enter the human body ingestion inhalation dermal site:ncbi.nlm.nih.gov",
+//     "bioaccumulation of microplastics in human organs site:sciencedirect.com",
+//     "crossing blood brain barrier microplastics placenta gut brain site:nature.com",
+//     "translocation of microplastics to brain or placenta site:cell.com",
+//     "microplastics inflammation oxidative stress endocrine disruption site:ncbi.nlm.nih.gov",
+//     "microplastics gut microbiome dysbiosis immunity site:gut.bmj.com OR site:nature.com",
+//     "microplastics reproductive health fetal exposure site:thelancet.com",
+//     "microplastics impact on brain neurological disorders site:sciencedirect.com",
+//     "microplastics and chronic disease cancer diabetes cardiovascular site:who.int",
+//     "microplastics linked to erectile dysfunction antibiotic resistance superbugs",
+//     "food contamination microplastics seafood produce packaging site:efsa.europa.eu",
+//     "airborne microplastics indoor exposure site:epa.gov OR site:pubmed.ncbi.nlm.nih.gov",
+//     "textiles cosmetics furniture microplastic emissions site:echa.europa.eu",
+//     "wellness industry microplastics awareness detox contradictions site:gwi.org",
+//     "clean living vs microplastic reality wellness narrative site:mindbodygreen.com OR site:wellandgood.com",
+//     "microplastics detox evidence probiotics antioxidants site:ncbi.nlm.nih.gov",
+//     "individual microplastic exposure reduction tips 2025 site:cdc.gov OR site:who.int",
+//     "new technologies microplastic removal blood purification 2025",
+//     "probiotic and antioxidant strategies microplastic detox site:sciencedirect.com",
+//     "wellness program standards to reduce microplastic exposure site:spaindustry.org",
+//     "2025 microplastic research priorities wellness industry site:gwi.org OR site:nih.gov",
+//     "call to action microplastics wellness sustainability site:globalwellnesssummit.com",
+//     "research gaps in microplastic and human health site:thelancet.com OR site:who.int"
+//   ]; 
 //   for (const query of searchQueries) {
 //      await processQueryAndSave(query);
 //   }
