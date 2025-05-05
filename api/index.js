@@ -226,13 +226,10 @@ app.post('/api/add-news', async (req, res) => {
   }
 });
 
-// Scheduled Fetch Endpoint (for Vercel Cron)
-app.get('/api/scheduled-fetch', async (req, res) => {
-  // Optional: Add security check (e.g., check for a secret header/token)
-  // if (req.headers['authorization'] !== `Bearer ${process.env.CRON_SECRET}`) {
-  //   return res.status(401).send('Unauthorized');
-  // }
-  console.log('Scheduled fetch triggered via API.');
+// Endpoint to get the defined search queries
+// Added comment to force redeploy
+app.get('/api/search-queries', (req, res) => {
+  // We need the list of queries defined here
   const searchQueries = [
       "latest research microplastics human health site:nature.com OR site:sciencedirect.com",
       "global microplastic pollution report 2025 site:who.int OR site:unep.org",
@@ -263,23 +260,14 @@ app.get('/api/scheduled-fetch', async (req, res) => {
       "call to action microplastics wellness sustainability site:globalwellnesssummit.com",
       "research gaps in microplastic and human health site:thelancet.com OR site:who.int"
   ];
-  let totalAdded = 0;
-  try {
-    for (const query of searchQueries) {
-      const addedCount = await processQueryAndSave(query);
-      totalAdded += addedCount;
-    }
-    console.log(`Scheduled fetch completed. Total new articles added: ${totalAdded}`);
-    res.status(200).json({ message: 'Scheduled fetch cycle completed.', newArticlesAdded: totalAdded });
-  } catch (error) {
-    console.error('Error during scheduled fetch cycle:', error);
-    res.status(500).json({ error: 'An error occurred during the scheduled fetch cycle.' });
-  }
+  res.status(200).json({ queries: searchQueries });
 });
 
-// Manual Trigger Fetch Endpoint (for Frontend Button)
+// Manual Trigger Fetch Endpoint (Processes ONE query per call)
 app.post('/api/trigger-fetch', async (req, res) => {
-  console.log('Manual fetch triggered via POST API.'); 
+  const { queryIndex } = req.body;
+
+  // Define the list of queries here (or fetch/require from a shared location)
   const searchQueries = [
       "latest research microplastics human health site:nature.com OR site:sciencedirect.com",
       "global microplastic pollution report 2025 site:who.int OR site:unep.org",
@@ -310,18 +298,32 @@ app.post('/api/trigger-fetch', async (req, res) => {
       "call to action microplastics wellness sustainability site:globalwellnesssummit.com",
       "research gaps in microplastic and human health site:thelancet.com OR site:who.int"
   ];
-  let totalAdded = 0;
+
+  if (typeof queryIndex !== 'number' || queryIndex < 0 || queryIndex >= searchQueries.length) {
+    return res.status(400).json({ error: 'Invalid or missing queryIndex.' });
+  }
+
+  const currentQuery = searchQueries[queryIndex];
+  console.log(`Manual fetch triggered for query #${queryIndex}: "${currentQuery}"`);
+
   try {
-    for (const query of searchQueries) {
-      // Re-use the same processing logic
-      const addedCount = await processQueryAndSave(query);
-      totalAdded += addedCount;
-    }
-    console.log(`Manual fetch completed. Total new articles added: ${totalAdded}`);
-    res.status(200).json({ message: 'Manual fetch cycle completed.', newArticlesAdded: totalAdded });
+    const addedCount = await processQueryAndSave(currentQuery);
+    const nextIndex = (queryIndex + 1 < searchQueries.length) ? queryIndex + 1 : null;
+
+    console.log(`Query #${queryIndex} processed. Added: ${addedCount}. Next index: ${nextIndex}`);
+    res.status(200).json({
+      message: `Query ${queryIndex + 1}/${searchQueries.length} processed.`, 
+      query: currentQuery,
+      addedCount: addedCount,
+      nextIndex: nextIndex
+    });
   } catch (error) {
-    console.error('Error during manual fetch cycle:', error);
-    res.status(500).json({ error: 'An error occurred during the manual fetch cycle.' });
+    console.error(`Error processing query #${queryIndex} ("${currentQuery}"):`, error);
+    res.status(500).json({
+      error: `An error occurred while processing query #${queryIndex}.`, 
+      details: error.message,
+      query: currentQuery
+    });
   }
 });
 
