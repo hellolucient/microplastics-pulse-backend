@@ -19,3 +19,4 @@ yarn-error.log*
 
 # Optional OS files
 .DS_Store 
+.vercel
