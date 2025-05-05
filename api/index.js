@@ -263,6 +263,51 @@ app.get('/api/search-queries', (req, res) => {
   res.status(200).json({ queries: searchQueries });
 });
 
+// --- News Fetching Endpoint with Caching ---
+app.get('/api/latest-news', async (req, res) => {
+  if (!supabase) {
+      console.error('/api/latest-news: Supabase client not available.');
+      // Don't cache errors on the CDN
+      res.setHeader('Cache-Control', 'no-store'); 
+      return res.status(503).json({ error: 'Database client not available.' });
+  }
+
+  try {
+      // Fetch latest news items, ordered by processed_at descending
+      // Adjust limit as needed
+      const { data, error } = await supabase
+          .from('latest_news')
+          .select('*') 
+          .order('processed_at', { ascending: false })
+          .limit(50); // Example limit
+
+      if (error) {
+          console.error('Error fetching latest news:', error);
+          // Don't cache errors on the CDN
+          res.setHeader('Cache-Control', 'no-store'); 
+          throw error;
+      }
+
+      // Set Cache-Control header for Vercel Edge Caching and browsers
+      // Cache for 1 hour (3600 seconds), allow serving stale for 1 day while revalidating
+      res.setHeader('Cache-Control', 'public, max-age=3600, stale-while-revalidate=86400');
+
+      // Send the data
+      res.status(200).json(data || []); // Ensure we return an array even if data is null
+
+  } catch (error) {
+      // Ensure Cache-Control is set to no-store if not already
+      if (!res.getHeader('Cache-Control')) {
+          res.setHeader('Cache-Control', 'no-store');
+      }
+      // Log the error if it wasn't the Supabase fetch error already logged
+      if (!error.message?.includes('fetching latest news')) { // Avoid double logging
+          console.error('Unexpected error in /api/latest-news:', error);
+      }
+      res.status(500).json({ error: 'Failed to fetch latest news.' });
+  }
+});
+
 // Manual Trigger Fetch Endpoint (Processes ONE query per call)
 app.post('/api/trigger-fetch', async (req, res) => {
   const { queryIndex } = req.body;
