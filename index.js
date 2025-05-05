@@ -115,19 +115,29 @@ app.post('/api/add-news', async (req, res) => {
       // published_date would ideally come from Google Search or scraping, add later if possible
     };
 
-    console.log('Inserting new item into Supabase:', newItem);
+    console.log('Attempting to insert new item into Supabase:', JSON.stringify(newItem, null, 2)); 
+
+    // Remove .select() and just check the error
     const { error: insertError } = await supabase
       .from('latest_news')
       .insert(newItem);
+       // .select(); // <-- REMOVED
 
     if (insertError) {
-      console.error('Error inserting data into Supabase:', insertError);
-      return res.status(500).json({ error: 'Database error saving article.' });
+      console.error('!!! Supabase Insert Error Occurred:', insertError);
+      if (insertError.code === '23505') { // Postgres unique violation code
+           console.warn(`Insert failed due to duplicate URL (error code 23505): ${url}`);
+           return res.status(409).json({ message: 'URL already exists (detected during insert).' });
+      } else {
+          return res.status(500).json({ error: 'Database error saving article.', details: insertError.message });
+      }
+    } else {
+      // If no error, assume success for now, but acknowledge we didn't get data back
+      console.log('Supabase Insert Reported No Error.'); 
+      console.log(`Successfully processed article: ${url}`);
+      // Can't return insertedData[0] anymore
+      return res.status(201).json({ message: 'Article processed successfully (insert reported no error).', data: newItem }); 
     }
-
-    console.log('Successfully added new article:', url);
-    // Return the newly added item details (optional)
-    return res.status(201).json({ message: 'Article added successfully.', data: newItem }); 
 
   } catch (error) {
     console.error('Unexpected error in /api/add-news:', error);
