@@ -55,7 +55,10 @@ const chapterTitles = [
  * Fetches search results from Google Custom Search API.
  * @param {string} query The search query (e.g., "microplastic health effects").
  * @param {number} numResults The number of results to request (default: 10).
- * @returns {Promise<Array<{title: string, link: string, snippet: string}>>} A list of search results.
+ * @returns {Promise<{success: boolean, articles?: Array<{title: string, link: string, snippet: string}>, error?: {status?: number, message: string}}>}
+ *          An object indicating success or failure.
+ *          On success, includes the 'articles' array (might be empty).
+ *          On failure, includes the 'error' object with status and message.
  */
 async function fetchArticlesFromGoogle(query, numResults = 10) {
     const apiKey = process.env.GOOGLE_API_KEY;
@@ -63,8 +66,10 @@ async function fetchArticlesFromGoogle(query, numResults = 10) {
     const apiUrl = "https://www.googleapis.com/customsearch/v1";
 
     if (!apiKey || !cxId) {
-        console.error("Google API Key or CX ID is missing.");
-        return [];
+        const errorMsg = "Google API Key or CX ID is missing.";
+        console.error(errorMsg);
+        // Return failure object
+        return { success: false, error: { message: errorMsg } };
     }
     const params = { key: apiKey, cx: cxId, q: query, num: numResults };
 
@@ -74,15 +79,20 @@ async function fetchArticlesFromGoogle(query, numResults = 10) {
         if (response.data && response.data.items) {
             const articles = response.data.items.map(item => ({ title: item.title, link: item.link, snippet: item.snippet }));
             console.log(`Found ${articles.length} results from Google.`);
-            return articles;
+            // Return success object with articles
+            return { success: true, articles: articles };
         } else {
             console.log('No items found in Google response.');
-            return [];
+            // Return success object with empty articles array
+            return { success: true, articles: [] };
         }
     } catch (error) {
-        console.error('Error fetching from Google Custom Search:', error.response ? `${error.message} - Status: ${error.response.status}` : error.message);
-        if (error.response && error.response.data) console.error('Google API Error Details:', error.response.data.error?.message || JSON.stringify(error.response.data));
-        return [];
+        const status = error.response?.status;
+        const errorMessage = error.response?.data?.error?.message || error.message;
+        console.error('Error fetching from Google Custom Search:', error.response ? `${error.message} - Status: ${status}` : error.message);
+        if (error.response && error.response.data) console.error('Google API Error Details:', errorMessage);
+        // Return failure object with error details
+        return { success: false, error: { status: status, message: errorMessage } };
     }
 }
 
@@ -200,11 +210,30 @@ app.post('/api/add-news', async (req, res) => {
     return res.status(400).json({ error: 'Invalid or missing URL.' });
   }
   try {
+    // 1. Check DB
     const { data: existingArticle, error: checkError } = await supabase.from('latest_news').select('url').eq('url', url).maybeSingle();
-    if (checkError) throw checkError;
+    if (checkError) {
+        console.error("Supabase check error:", checkError);
+        throw checkError; // Let generic error handler catch DB issues
+    }
     if (existingArticle) return res.status(409).json({ message: 'URL already exists.' });
 
-    const searchResults = await fetchArticlesFromGoogle(url, 1);
+    // 2. Fetch from Google
+    const googleResponse = await fetchArticlesFromGoogle(url, 1);
+
+    // Handle Google API call failure
+    if (!googleResponse.success) {
+        if (googleResponse.error?.status === 429) {
+            console.warn('Google Search API quota exceeded.');
+            return res.status(429).json({ error: 'Google Search API quota exceeded. Please try again later.', details: googleResponse.error.message });
+        } else {
+            console.error('Google Search API call failed:', googleResponse.error);
+            return res.status(500).json({ error: 'Failed to communicate with Google Search API.', details: googleResponse.error?.message || 'Unknown API error' });
+        }
+    }
+
+    // API call was successful, now validate results
+    const searchResults = googleResponse.articles;
 
     // Validate Google Search results more flexibly by comparing hostnames
     let googleResultLink = null;
@@ -230,17 +259,16 @@ app.post('/api/add-news', async (req, res) => {
         }
     }
 
-    // If we couldn't get a result, or if the hostnames don't match, return 404
-    // We allow proceeding if googleResultHostname is null (due to parsing error) but log it
+    // If we couldn't get a result from Google (empty array), or if the hostnames don't match, return 404
+    // This now specifically means Google API worked, but didn't return a usable/matching result.
     if (!googleResultLink || (googleResultHostname && originalUrlHostname !== googleResultHostname)) {
-         console.warn(`Google Search result validation failed. Original URL: ${url}, Google URL: ${googleResultLink}, Original Host: ${originalUrlHostname}, Google Host: ${googleResultHostname}`);
+         console.warn(`Google Search result validation failed (API OK, no matching result). Original URL: ${url}, Google URL: ${googleResultLink}, Original Host: ${originalUrlHostname}, Google Host: ${googleResultHostname}`);
          return res.status(404).json({ error: 'Could not retrieve matching article metadata via Google Search.' });
     }
 
-    // Use the data from the Google search result
+    // 3. Process with AI and Save
     const articleData = searchResults[0];
-    // Ensure we use the *original* URL for saving and hostname extraction
-    const sourceHostname = originalUrlHostname; // Use the parsed hostname from the original URL
+    const sourceHostname = originalUrlHostname;
 
     const ai_summary = await summarizeText(articleData.title, articleData.snippet);
     const ai_category = await categorizeText(articleData.title, articleData.snippet);
@@ -248,13 +276,21 @@ app.post('/api/add-news', async (req, res) => {
 
     console.log('Attempting manual insert:', JSON.stringify(newItem, null, 2));
     const { error: insertError } = await supabase.from('latest_news').insert(newItem);
-    if (insertError) throw insertError;
+    if (insertError) {
+        console.error("Supabase insert error:", insertError);
+        // Let the generic error handler below deal with Supabase insert errors (like unique constraint)
+        throw insertError;
+    }
 
     console.log('Manual insert successful.');
     return res.status(201).json({ message: 'Article processed successfully.', data: newItem });
-  } catch (error) {
+
+  } catch (error) { // Generic error handler
     console.error('Error in /api/add-news:', error);
-    if (error.code === '23505') return res.status(409).json({ message: 'URL already exists.'});
+    if (error.code === '23505') { // Handle Supabase unique constraint violation specifically
+        return res.status(409).json({ message: 'URL already exists (detected during insert).' });
+    }
+    // Handle other Supabase errors or unexpected issues
     return res.status(500).json({ error: 'Internal server error processing URL.', details: error.message });
   }
 });
