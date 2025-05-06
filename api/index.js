@@ -147,48 +147,75 @@ Which chapter is MOST relevant to article "${title}" with description: "${snippe
 
 
 // --- Central Processing Logic (processQueryAndSave) ---
-// Assume this function exists here (copied/required from previous index.js)
-// Make sure it handles potential null supabase client
 /**
  * Fetches articles for a given query, processes new ones, and saves to DB.
+ * @returns {Promise<number>} The number of new articles successfully added.
  */
 async function processQueryAndSave(query) {
     if (!supabase) {
         console.error("processQueryAndSave: Supabase client not available.");
-        return 0;
+        return 0; // Indicate no articles added if DB is down
     }
     let newArticlesAdded = 0;
     console.log(`--- Starting processing for query: "${query}" ---`);
-    const articles = await fetchArticlesFromGoogle(query, 10);
-    if (!articles || articles.length === 0) return 0;
 
-    const { data: existingUrlsData, error: urlFetchError } = await supabase.from('latest_news').select('url');
-    if (urlFetchError) {
-        console.error('Error fetching existing URLs:', urlFetchError);
+    // Fetch from Google
+    const googleResponse = await fetchArticlesFromGoogle(query, 10);
+
+    // Handle Google API call failure or no results
+    if (!googleResponse.success) {
+        console.error(`Google Search API call failed for query "${query}":`, googleResponse.error);
+        // Log specific quota error
+        if (googleResponse.error?.status === 429) {
+            console.warn(`Google Search API quota exceeded for query "${query}".`);
+        }
+        // Indicate failure by returning 0 articles added
         return 0;
     }
-    const existingUrls = new Set(existingUrlsData.map(item => item.url));
-    console.log(`Found ${existingUrls.size} existing URLs.`);
 
+    const articles = googleResponse.articles;
+    // Check if the successful API call returned any articles
+    if (!articles || articles.length === 0) {
+        console.log(`No articles found in Google response for query: "${query}"`);
+        return 0;
+    }
+
+    // Fetch existing URLs from DB
+    const { data: existingUrlsData, error: urlFetchError } = await supabase.from('latest_news').select('url');
+    if (urlFetchError) {
+        console.error(`Error fetching existing URLs for query "${query}":`, urlFetchError);
+        return 0; // Indicate failure fetching existing URLs
+    }
+    const existingUrls = new Set(existingUrlsData.map(item => item.url));
+    console.log(`Found ${existingUrls.size} existing URLs before processing query "${query}".`);
+
+    // Process returned articles
     for (const article of articles) {
         const { title, link: url, snippet } = article;
+        // Basic validation and duplicate check
         if (!url || !title || !url.startsWith('http') || existingUrls.has(url)) continue;
 
-        console.log(`Processing NEW article: ${title} (${url})`);
+        console.log(`Processing NEW article from query "${query}": ${title} (${url})`);
         const ai_summary = await summarizeText(title, snippet);
         const ai_category = await categorizeText(title, snippet);
         const newItem = { url, title, ai_summary, ai_category, source: new URL(url).hostname, processed_at: new Date().toISOString() };
 
+        // Insert into DB
         const { error: insertError } = await supabase.from('latest_news').insert(newItem);
         if (insertError) {
-            if (insertError.code === '23505') console.warn(`Duplicate URL during insert: ${url}`);
-            else console.error(`Insert error for ${url}:`, insertError);
+            // Handle known errors gracefully
+            if (insertError.code === '23505') {
+                console.warn(`Duplicate URL during insert (race condition?): ${url}`);
+            } else {
+                // Log other insertion errors but continue processing other articles
+                console.error(`Insert error for ${url} from query "${query}":`, insertError);
+            }
         } else {
             console.log(`Successfully added: ${title}`);
             newArticlesAdded++;
-            existingUrls.add(url);
+            existingUrls.add(url); // Add to set to avoid duplicates within this run
         }
-        // Optional delay
+        // Optional delay can be added here if needed
     }
     console.log(`--- Finished query: "${query}". Added ${newArticlesAdded} new. ---`);
     return newArticlesAdded;
