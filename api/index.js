@@ -149,12 +149,14 @@ Which chapter is MOST relevant to article "${title}" with description: "${snippe
 // --- Central Processing Logic (processQueryAndSave) ---
 /**
  * Fetches articles for a given query, processes new ones, and saves to DB.
- * @returns {Promise<number>} The number of new articles successfully added.
+ * @returns {Promise<{status: string, count: number}>} An object indicating the outcome:
+ *          - status: 'success', 'quota_error', 'google_api_error', 'db_error', 'no_client_error'
+ *          - count: Number of articles added (only relevant on 'success')
  */
 async function processQueryAndSave(query) {
     if (!supabase) {
         console.error("processQueryAndSave: Supabase client not available.");
-        return 0; // Indicate no articles added if DB is down
+        return { status: 'db_error', count: 0 };
     }
     let newArticlesAdded = 0;
     console.log(`--- Starting processing for query: "${query}" ---`);
@@ -162,29 +164,30 @@ async function processQueryAndSave(query) {
     // Fetch from Google
     const googleResponse = await fetchArticlesFromGoogle(query, 10);
 
-    // Handle Google API call failure or no results
+    // Handle Google API call failure
     if (!googleResponse.success) {
         console.error(`Google Search API call failed for query "${query}":`, googleResponse.error);
-        // Log specific quota error
         if (googleResponse.error?.status === 429) {
             console.warn(`Google Search API quota exceeded for query "${query}".`);
+            return { status: 'quota_error', count: 0 }; // Specific status for quota
+        } else {
+            // Other Google API errors
+            return { status: 'google_api_error', count: 0 };
         }
-        // Indicate failure by returning 0 articles added
-        return 0;
     }
 
     const articles = googleResponse.articles;
     // Check if the successful API call returned any articles
     if (!articles || articles.length === 0) {
         console.log(`No articles found in Google response for query: "${query}"`);
-        return 0;
+        return { status: 'success', count: 0 }; // Success, but 0 articles found
     }
 
     // Fetch existing URLs from DB
     const { data: existingUrlsData, error: urlFetchError } = await supabase.from('latest_news').select('url');
     if (urlFetchError) {
         console.error(`Error fetching existing URLs for query "${query}":`, urlFetchError);
-        return 0; // Indicate failure fetching existing URLs
+        return { status: 'db_error', count: 0 }; // DB error fetching URLs
     }
     const existingUrls = new Set(existingUrlsData.map(item => item.url));
     console.log(`Found ${existingUrls.size} existing URLs before processing query "${query}".`);
@@ -198,27 +201,38 @@ async function processQueryAndSave(query) {
         console.log(`Processing NEW article from query "${query}": ${title} (${url})`);
         const ai_summary = await summarizeText(title, snippet);
         const ai_category = await categorizeText(title, snippet);
-        const newItem = { url, title, ai_summary, ai_category, source: new URL(url).hostname, processed_at: new Date().toISOString() };
+
+        // Add basic error handling for URL parsing
+        let sourceHostname;
+        try {
+            sourceHostname = new URL(url).hostname;
+        } catch (e) {
+            console.warn(`Invalid URL format encountered during processing: ${url}`);
+            continue; // Skip this article if URL is invalid
+        }
+
+        const newItem = { url, title, ai_summary, ai_category, source: sourceHostname, processed_at: new Date().toISOString() };
 
         // Insert into DB
         const { error: insertError } = await supabase.from('latest_news').insert(newItem);
         if (insertError) {
-            // Handle known errors gracefully
             if (insertError.code === '23505') {
                 console.warn(`Duplicate URL during insert (race condition?): ${url}`);
             } else {
-                // Log other insertion errors but continue processing other articles
                 console.error(`Insert error for ${url} from query "${query}":`, insertError);
+                // Note: We are currently *not* stopping the whole process for a single insert error.
+                // If one insert fails, we log it and continue with the next article.
+                // If we wanted to stop immediately on *any* DB error, we would return { status: 'db_error', count: newArticlesAdded } here.
             }
         } else {
             console.log(`Successfully added: ${title}`);
             newArticlesAdded++;
-            existingUrls.add(url); // Add to set to avoid duplicates within this run
+            existingUrls.add(url);
         }
-        // Optional delay can be added here if needed
     }
     console.log(`--- Finished query: "${query}". Added ${newArticlesAdded} new. ---`);
-    return newArticlesAdded;
+    // Return success status and the count of added articles
+    return { status: 'success', count: newArticlesAdded };
 }
 
 
@@ -404,7 +418,7 @@ app.get('/api/latest-news', async (req, res) => {
   }
 });
 
-// Manual Trigger Fetch Endpoint (Processes ONE query per call)
+// Manual Trigger Fetch Endpoint (Processes ONE query per call, stops on quota error)
 app.post('/api/trigger-fetch', async (req, res) => {
   const { queryIndex } = req.body;
 
@@ -448,20 +462,51 @@ app.post('/api/trigger-fetch', async (req, res) => {
   console.log(`Manual fetch triggered for query #${queryIndex}: "${currentQuery}"`);
 
   try {
-    const addedCount = await processQueryAndSave(currentQuery);
+    // Call processQueryAndSave and get the result object
+    const result = await processQueryAndSave(currentQuery);
+
+    // Check the status from processQueryAndSave
+    if (result.status === 'quota_error') {
+        // Stop immediately and return 429
+        console.warn(`Stopping manual fetch due to Google API quota limit hit on query index ${queryIndex}.`);
+        return res.status(429).json({
+            error: 'Google Search API quota exceeded.',
+            message: `Processing stopped at query index ${queryIndex} due to quota limit. Please try again later.`,
+            query: currentQuery,
+            processedCount: result.count, // Will be 0
+            nextIndex: null // Indicate we stopped
+        });
+    } else if (result.status !== 'success') {
+        // Handle other errors reported by processQueryAndSave (e.g., 'google_api_error', 'db_error')
+        console.error(`Stopping manual fetch due to an error (${result.status}) during processing of query index ${queryIndex}.`);
+        return res.status(500).json({
+            error: `An internal error (${result.status}) occurred while processing the query.`,
+            query: currentQuery,
+            processedCount: result.count, // Likely 0
+            nextIndex: null // Indicate we stopped
+        });
+    }
+
+    // If status is 'success':
+    const addedCount = result.count;
     const nextIndex = (queryIndex + 1 < searchQueries.length) ? queryIndex + 1 : null;
 
-    console.log(`Query #${queryIndex} processed. Added: ${addedCount}. Next index: ${nextIndex}`);
+    console.log(`Query #${queryIndex} processed successfully. Added: ${addedCount}. Next index: ${nextIndex}`);
+    // Return 200 OK with the result for this query index
     res.status(200).json({
-      message: `Query ${queryIndex + 1}/${searchQueries.length} processed.`, 
+      message: `Query ${queryIndex + 1}/${searchQueries.length} processed successfully.`, 
       query: currentQuery,
       addedCount: addedCount,
       nextIndex: nextIndex
     });
+
   } catch (error) {
-    console.error(`Error processing query #${queryIndex} ("${currentQuery}"):`, error);
+    // This outer catch handles unexpected errors *within* the /api/trigger-fetch endpoint itself,
+    // or errors thrown explicitly from processQueryAndSave if we were to change it to throw.
+    // Errors handled internally by processQueryAndSave (like quota) won't reach here.
+    console.error(`Unexpected error in /api/trigger-fetch for query #${queryIndex} ("${currentQuery}"):`, error);
     res.status(500).json({
-      error: `An error occurred while processing query #${queryIndex}.`, 
+      error: `An unexpected error occurred while setting up processing for query #${queryIndex}.`, 
       details: error.message,
       query: currentQuery
     });
