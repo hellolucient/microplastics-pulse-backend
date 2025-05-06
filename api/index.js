@@ -205,13 +205,46 @@ app.post('/api/add-news', async (req, res) => {
     if (existingArticle) return res.status(409).json({ message: 'URL already exists.' });
 
     const searchResults = await fetchArticlesFromGoogle(url, 1);
-    if (!searchResults || searchResults.length === 0 || !searchResults[0].link.includes(url)) {
-         return res.status(404).json({ error: 'Could not retrieve article metadata via Google Search.' });
+
+    // Validate Google Search results more flexibly by comparing hostnames
+    let googleResultLink = null;
+    if (searchResults && searchResults.length > 0 && searchResults[0].link) {
+        googleResultLink = searchResults[0].link;
     }
+
+    let originalUrlHostname = null;
+    try {
+        originalUrlHostname = new URL(url).hostname;
+    } catch (e) {
+        console.warn(`Invalid original URL format: ${url}`);
+        return res.status(400).json({ error: 'Invalid URL format submitted.' });
+    }
+
+    let googleResultHostname = null;
+    if (googleResultLink) {
+        try {
+            googleResultHostname = new URL(googleResultLink).hostname;
+        } catch (e) {
+            console.warn(`Invalid Google result URL format: ${googleResultLink}`);
+            // Proceed without hostname check if Google's URL is weird, but log it
+        }
+    }
+
+    // If we couldn't get a result, or if the hostnames don't match, return 404
+    // We allow proceeding if googleResultHostname is null (due to parsing error) but log it
+    if (!googleResultLink || (googleResultHostname && originalUrlHostname !== googleResultHostname)) {
+         console.warn(`Google Search result validation failed. Original URL: ${url}, Google URL: ${googleResultLink}, Original Host: ${originalUrlHostname}, Google Host: ${googleResultHostname}`);
+         return res.status(404).json({ error: 'Could not retrieve matching article metadata via Google Search.' });
+    }
+
+    // Use the data from the Google search result
     const articleData = searchResults[0];
+    // Ensure we use the *original* URL for saving and hostname extraction
+    const sourceHostname = originalUrlHostname; // Use the parsed hostname from the original URL
+
     const ai_summary = await summarizeText(articleData.title, articleData.snippet);
     const ai_category = await categorizeText(articleData.title, articleData.snippet);
-    const newItem = { url, title: articleData.title, ai_summary, ai_category, source: new URL(url).hostname, processed_at: new Date().toISOString() };
+    const newItem = { url: url, title: articleData.title, ai_summary, ai_category, source: sourceHostname, processed_at: new Date().toISOString() };
 
     console.log('Attempting manual insert:', JSON.stringify(newItem, null, 2));
     const { error: insertError } = await supabase.from('latest_news').insert(newItem);
