@@ -35,17 +35,6 @@ const openai = new OpenAI({
 });
 console.log('OpenAI client initialized.');
 
-// Whitepaper chapter titles for categorization context
-const chapterTitles = [
-  "Chapter 1: Microplastics and Human Health – Introduction",
-  "Chapter 2: Pathways into Human Biology",
-  "Chapter 3: Human Health Impacts of Microplastics",
-  "Chapter 4: Environmental Context: Exposure Pathways and Contamination Sources",
-  "Chapter 5: Wellness Industry Blindspot – Prevention, Reduction, and Wellness Programming",
-  "Chapter 6: Framework for Action",
-  "Chapter 7: Conclusion and Future Directions",
-];
-
 // --- API Endpoints ---
 
 // Basic check endpoint
@@ -102,14 +91,12 @@ app.post('/api/add-news', async (req, res) => {
 
     // 3. Process with OpenAI
     const ai_summary = await summarizeText(articleData.title, articleData.snippet);
-    const ai_category = await categorizeText(articleData.title, articleData.snippet);
 
     // 4. Save to Supabase
     const newItem = {
       url: url, // Use the original submitted URL
       title: articleData.title,
       ai_summary: ai_summary,
-      ai_category: ai_category,
       source: new URL(url).hostname, // Extract hostname as source
       processed_at: new Date().toISOString(),
       // published_date would ideally come from Google Search or scraping, add later if possible
@@ -195,14 +182,12 @@ async function processQueryAndSave(query) {
 
     // Process with OpenAI
     const ai_summary = await summarizeText(title, snippet);
-    const ai_category = await categorizeText(title, snippet);
 
     // Prepare item for DB
     const newItem = {
       url: url,
       title: title,
       ai_summary: ai_summary,
-      ai_category: ai_category,
       source: new URL(url).hostname, 
       processed_at: new Date().toISOString(),
       // published_date could be added here if fetchArticlesFromGoogle provides it
@@ -389,66 +374,22 @@ async function fetchArticlesFromGoogle(query, numResults = 10) {
  */
 async function summarizeText(title, snippet) {
   if (!title || !snippet) return null;
-
-  const prompt = `Summarize the key point of an article titled "${title}" with the following description: "${snippet}". Respond with only the summary, in one or two sentences.`;
-
+  // Updated prompt for longer summary
+  const prompt = `Summarize the key points of an article titled "${title}" with the following description: "${snippet}". Respond with only the summary, in up to four sentences, providing a bit more depth.`;
   try {
     console.log(`Requesting summary for: "${title}"`);
     const completion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo", // Or use "gpt-4" if preferred/available
+      model: "gpt-3.5-turbo",
       messages: [{ role: "user", content: prompt }],
-      max_tokens: 60,
-      temperature: 0.5, // Adjust for creativity vs. focus
+      max_tokens: 120, // Increased max_tokens for longer summary
+      temperature: 0.5,
       n: 1,
     });
-
     const summary = completion.choices[0]?.message?.content?.trim();
     console.log(`Generated summary: ${summary}`);
     return summary || null;
   } catch (error) {
     console.error('Error generating summary with OpenAI:', error.response ? `${error.message} - ${JSON.stringify(error.response.data)}` : error.message);
-    return null;
-  }
-}
-
-/**
- * Suggests a relevant whitepaper chapter category using OpenAI.
- * @param {string} title The article title.
- * @param {string} snippet The article snippet/description.
- * @returns {Promise<string|null>} The suggested chapter title or null on error.
- */
-async function categorizeText(title, snippet) {
-  if (!title || !snippet) return null;
-
-  const chapterList = chapterTitles.join("\n - ");
-  const prompt = `Given the following whitepaper chapter titles:
- - ${chapterList}
-
-Which chapter is MOST relevant to an article titled "${title}" with the description: "${snippet}"? Respond ONLY with the exact chapter title from the list provided.`;
-
-  try {
-    console.log(`Requesting category for: "${title}"`);
-    const completion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
-      messages: [{ role: "user", content: prompt }],
-      max_tokens: 50, // Max length of a chapter title should be less than this
-      temperature: 0.2,
-      n: 1,
-    });
-
-    let category = completion.choices[0]?.message?.content?.trim();
-    
-    // Basic validation: Check if the response is one of the chapter titles
-    if (category && chapterTitles.includes(category)) {
-        console.log(`Suggested category: ${category}`);
-        return category;
-    } else {
-        console.warn(`OpenAI category response ("${category}") not found in chapter list. Defaulting to null.`);
-        return null; // Return null if the response isn't a valid chapter title
-    }
-
-  } catch (error) {
-    console.error('Error generating category with OpenAI:', error.response ? `${error.message} - ${JSON.stringify(error.response.data)}` : error.message);
     return null;
   }
 }

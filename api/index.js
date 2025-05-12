@@ -40,13 +40,6 @@ if (process.env.OPENAI_API_KEY) {
    console.error('Error: OPENAI_API_KEY missing.');
 }
 
-// --- Whitepaper chapter titles ---
-const chapterTitles = [
-  "Chapter 1: Microplastics and Human Health – Introduction",
-  // ... (rest of chapter titles) ...
-  "Chapter 7: Conclusion and Future Directions",
-];
-
 // --- Helper Functions (fetchArticlesFromGoogle, summarizeText, categorizeText) ---
 // Assume these functions exist here (copied/required from previous index.js)
 // Make sure they handle potential null clients (supabase, openai)
@@ -101,11 +94,11 @@ async function fetchArticlesFromGoogle(query, numResults = 10) {
  */
 async function summarizeText(title, snippet) {
     if (!openai || !title || !snippet) return null;
-    const prompt = `Summarize the key point of an article titled "${title}" with description: "${snippet}". Respond concisely in one or two sentences.`;
+    const prompt = `Summarize the key points of an article titled "${title}" with the following description: "${snippet}". Respond with only the summary, in up to four sentences, providing a bit more depth.`;
     try {
         console.log(`Requesting summary for: "${title}"`);
         const completion = await openai.chat.completions.create({
-            model: "gpt-3.5-turbo", messages: [{ role: "user", content: prompt }], max_tokens: 60, temperature: 0.5, n: 1,
+            model: "gpt-3.5-turbo", messages: [{ role: "user", content: prompt }], max_tokens: 120, temperature: 0.5, n: 1,
         });
         const summary = completion.choices[0]?.message?.content?.trim();
         console.log(`Generated summary: ${summary}`);
@@ -200,7 +193,6 @@ async function processQueryAndSave(query) {
 
         console.log(`Processing NEW article from query "${query}": ${title} (${url})`);
         const ai_summary = await summarizeText(title, snippet);
-        const ai_category = await categorizeText(title, snippet);
 
         // Add basic error handling for URL parsing
         let sourceHostname;
@@ -211,7 +203,7 @@ async function processQueryAndSave(query) {
             continue; // Skip this article if URL is invalid
         }
 
-        const newItem = { url, title, ai_summary, ai_category, source: sourceHostname, processed_at: new Date().toISOString() };
+        const newItem = { url, title, ai_summary, source: sourceHostname, processed_at: new Date().toISOString() };
 
         // Insert into DB
         const { error: insertError } = await supabase.from('latest_news').insert(newItem);
@@ -312,8 +304,7 @@ app.post('/api/add-news', async (req, res) => {
     const sourceHostname = originalUrlHostname;
 
     const ai_summary = await summarizeText(articleData.title, articleData.snippet);
-    const ai_category = await categorizeText(articleData.title, articleData.snippet);
-    const newItem = { url: url, title: articleData.title, ai_summary, ai_category, source: sourceHostname, processed_at: new Date().toISOString() };
+    const newItem = { url: url, title: articleData.title, ai_summary, source: sourceHostname, processed_at: new Date().toISOString() };
 
     console.log('Attempting manual insert:', JSON.stringify(newItem, null, 2));
     const { error: insertError } = await supabase.from('latest_news').insert(newItem);
