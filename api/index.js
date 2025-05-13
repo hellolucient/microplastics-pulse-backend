@@ -4,6 +4,7 @@ const cors = require('cors');
 const { createClient } = require('@supabase/supabase-js');
 const { OpenAI } = require('openai');
 const axios = require('axios');
+const { put } = require('@vercel/blob'); // Added Vercel Blob import
 // const cron = require('node-cron'); // Removed for Vercel Serverless
 
 const app = express();
@@ -137,6 +138,74 @@ Which chapter is MOST relevant to article "${title}" with description: "${snippe
     }
 }
 
+/**
+ * Generates an image using OpenAI DALL-E, uploads it to Vercel Blob, and returns the Blob URL.
+ * @param {string} title The article title to use for the image prompt.
+ * @param {string} articleUrl The URL of the article, used for generating a unique filename.
+ * @returns {Promise<string|null>} The Vercel Blob URL of the stored image, or null on failure.
+ */
+async function generateAndStoreImage(title, articleUrl) {
+    console.log(`[generateAndStoreImage CALLED] Title: ${title}, URL: ${articleUrl}`);
+    if (!openai) {
+        console.error("generateAndStoreImage: OpenAI client not available.");
+        return null;
+    }
+    if (!title || !articleUrl) {
+        console.error("generateAndStoreImage: Missing title or articleUrl.");
+        return null;
+    }
+
+    const prompt = `A compelling and relevant news-style image for an article titled: "${title.substring(0, 150)}". The image should be suitable for a news website, visually engaging, and directly related to the potential themes of the article. Avoid text in the image.`;
+
+    try {
+        console.log(`Requesting DALL-E image for: "${title}"`);
+        const imageResponse = await openai.images.generate({
+            model: "dall-e-2", // Or "dall-e-3" if available and preferred
+            prompt: prompt,
+            n: 1,
+            size: "512x512", // Available sizes: 256x256, 512x512, 1024x1024 for DALL-E 2
+            response_format: "url", // Gets a temporary URL for the image
+        });
+
+        const tempImageUrl = imageResponse.data?.[0]?.url;
+        if (!tempImageUrl) {
+            console.error("DALL-E did not return an image URL.");
+            return null;
+        }
+        console.log(`DALL-E temporary image URL: ${tempImageUrl}`);
+
+        // Fetch the image data from the temporary URL
+        const imageBufferResponse = await axios.get(tempImageUrl, { responseType: 'arraybuffer' });
+        const imageBuffer = imageBufferResponse.data;
+
+        if (!imageBuffer) {
+            console.error("Failed to fetch image data from DALL-E URL.");
+            return null;
+        }
+
+        // Sanitize articleUrl to create a safe filename part
+        const sanitizedUrlPart = articleUrl.replace(/[^a-zA-Z0-9-_]/g, '_').substring(0, 100);
+        const filename = `article-images/${sanitizedUrlPart}-${Date.now()}.png`;
+
+        console.log(`Uploading image to Vercel Blob as: ${filename}`);
+        const blob = await put(filename, imageBuffer, {
+            access: 'public',
+            contentType: 'image/png',
+            addRandomSuffix: false, // Filename should be unique enough with timestamp
+        });
+
+        console.log(`Image successfully uploaded to Vercel Blob: ${blob.url}`);
+        return blob.url;
+
+    } catch (error) {
+        console.error('Error in generateAndStoreImage:', error.response ? `${error.message} - ${JSON.stringify(error.response.data)}` : error.message);
+        if (error.response?.data?.error?.code === 'billing_hard_limit_reached') {
+            console.error("OpenAI DALL-E request failed: Billing hard limit reached. Cannot generate image.");
+            // Potentially set a flag to stop further image generation attempts for a while
+        }
+        return null;
+    }
+}
 
 // --- Central Processing Logic (processQueryAndSave) ---
 /**
@@ -192,6 +261,7 @@ async function processQueryAndSave(query) {
 
         console.log(`Processing NEW article from query "${query}": ${title} (${url})`);
         const ai_summary = await summarizeText(title, snippet);
+        const ai_image_url = await generateAndStoreImage(title, url); // Generate and store image
 
         // Add basic error handling for URL parsing
         let sourceHostname;
@@ -202,7 +272,7 @@ async function processQueryAndSave(query) {
             continue; // Skip this article if URL is invalid
         }
 
-        const newItem = { url, title, ai_summary, source: sourceHostname, processed_at: new Date().toISOString() };
+        const newItem = { url, title, ai_summary, ai_image_url, source: sourceHostname, processed_at: new Date().toISOString() };
 
         // Insert into DB
         const { error: insertError } = await supabase.from('latest_news').insert(newItem);
@@ -236,6 +306,7 @@ app.get('/api', (req, res) => {
 
 // Manual Add Endpoint
 app.post('/api/add-news', async (req, res) => {
+  console.log('[/api/add-news ENDPOINT HIT] Request received.');
   if (!supabase) return res.status(503).json({ error: 'Database client not available.' });
   const { url } = req.body;
   if (!url || typeof url !== 'string' || !url.startsWith('http')) {
@@ -303,7 +374,10 @@ app.post('/api/add-news', async (req, res) => {
     const sourceHostname = originalUrlHostname;
 
     const ai_summary = await summarizeText(articleData.title, articleData.snippet);
-    const newItem = { url: url, title: articleData.title, ai_summary, source: sourceHostname, processed_at: new Date().toISOString() };
+    console.log(`[BEFORE generateAndStoreImage] In /api/add-news. Title: ${articleData.title}, Link: ${articleData.link}`);
+    const ai_image_url = await generateAndStoreImage(articleData.title, articleData.link); // Generate and store image
+    console.log(`[AFTER generateAndStoreImage] In /api/add-news. Resulting ai_image_url: ${ai_image_url}`);
+    const newItem = { url: articleData.link, title: articleData.title, ai_summary, ai_image_url, source: sourceHostname, processed_at: new Date().toISOString() };
 
     console.log('Attempting manual insert:', JSON.stringify(newItem, null, 2));
     const { error: insertError } = await supabase.from('latest_news').insert(newItem);
@@ -520,4 +594,4 @@ if (require.main === module) {
   app.listen(localPort, () => {
     console.log(`Backend server listening directly on http://localhost:${localPort}`);
   });
-} 
+}
