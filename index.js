@@ -132,6 +132,44 @@ app.post('/api/add-news', async (req, res) => {
   }
 });
 
+// --- ADDED LATEST NEWS ENDPOINT ---
+app.get('/api/latest-news', async (req, res) => {
+  if (!supabase) {
+      console.error('/api/latest-news: Supabase client not available.');
+      res.setHeader('Cache-Control', 'no-store'); 
+      return res.status(503).json({ error: 'Database client not available.' });
+  }
+  try {
+      const { data, error } = await supabase
+          .from('latest_news')
+          .select('*') 
+          .order('processed_at', { ascending: false })
+          .limit(50); // Example limit
+
+      if (error) {
+          console.error('Error fetching latest news:', error);
+          res.setHeader('Cache-Control', 'no-store'); 
+          // Instead of throwing, send a response directly for clarity
+          return res.status(500).json({ error: 'Database error fetching latest news.', details: error.message });
+      }
+      // For local dev, caching headers might not be strictly necessary but don't hurt
+      res.setHeader('Cache-Control', 'public, max-age=3600, stale-while-revalidate=86400');
+      res.status(200).json(data || []);
+  } catch (error) { // This outer catch is for truly unexpected errors
+      if (!res.getHeader('Cache-Control')) {
+          res.setHeader('Cache-Control', 'no-store');
+      }
+      // Avoid double logging if already logged
+      if (!error.message?.includes('fetching latest news') && !error.message?.includes('Supabase client not available')) {
+          console.error('Unexpected critical error in /api/latest-news:', error);
+      }
+      if (!res.headersSent) {
+        res.status(500).json({ error: 'Failed to fetch latest news due to an unexpected server issue.' });
+      }
+  }
+});
+// --- END ADDED LATEST NEWS ENDPOINT ---
+
 // --- Central Processing Logic ---
 /**
  * Fetches articles for a given query, processes new ones, and saves to DB.
@@ -367,21 +405,20 @@ async function fetchArticlesFromGoogle(query, numResults = 10) {
 }
 
 /**
- * Generates a brief summary using OpenAI.
+ * Generates a detailed summary using OpenAI.
  * @param {string} title The article title.
  * @param {string} snippet The article snippet/description.
  * @returns {Promise<string|null>} The generated summary or null on error.
  */
 async function summarizeText(title, snippet) {
   if (!title || !snippet) return null;
-  // Updated prompt for longer summary
-  const prompt = `Summarize the key points of an article titled "${title}" with the following description: "${snippet}". Respond with only the summary, in up to four sentences, providing a bit more depth.`;
+  const prompt = `Generate a detailed summary of the article titled "${title}" with the provided snippet: "${snippet}". The summary should be comprehensive, approximately 6-8 sentences long (around 150-200 words). It must capture the main topics and key findings. Crucially, ensure the summary includes specific examples, important terms, likely key search terms, mentions of product types (e.g., water bottles, food packaging), and relevant category mentions (e.g., health impacts, environmental sources) if present in the article. The primary goal is to provide enough detail to significantly improve searchability for these specific keywords and concepts within the article's content. Respond with only the summary.`;
   try {
-    console.log(`Requesting summary for: "${title}"`);
+    console.log(`Requesting detailed summary for: "${title}"`);
     const completion = await openai.chat.completions.create({
       model: "gpt-3.5-turbo",
       messages: [{ role: "user", content: prompt }],
-      max_tokens: 120, // Increased max_tokens for longer summary
+      max_tokens: 250, // Increased max_tokens for more detailed summary
       temperature: 0.5,
       n: 1,
     });

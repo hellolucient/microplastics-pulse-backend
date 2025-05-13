@@ -1,6 +1,6 @@
 require('dotenv').config(); 
 const express = require('express');
-// const cors = require('cors'); // <-- Remove require
+const cors = require('cors');
 const { createClient } = require('@supabase/supabase-js');
 const { OpenAI } = require('openai');
 const axios = require('axios');
@@ -10,12 +10,7 @@ const app = express();
 // const port = process.env.PORT || 3001; // Port is handled by Vercel
 
 // --- Middleware ---
-// Remove CORS middleware setup
-// const corsOptions = {
-//   origin: 'http://localhost:5173', 
-//   optionsSuccessStatus: 200 
-// };
-// app.use(cors(corsOptions)); 
+app.use(cors());
 app.use(express.json()); 
 
 // --- Initialize Clients ---
@@ -90,15 +85,19 @@ async function fetchArticlesFromGoogle(query, numResults = 10) {
 }
 
 /**
- * Generates a brief summary using OpenAI.
+ * Generates a detailed summary of the article using OpenAI.
  */
 async function summarizeText(title, snippet) {
     if (!openai || !title || !snippet) return null;
-    const prompt = `Summarize the key points of an article titled "${title}" with the following description: "${snippet}". Respond with only the summary, in up to four sentences, providing a bit more depth.`;
+    const prompt = `Generate a detailed summary of the article titled "${title}" with the provided snippet: "${snippet}". The summary should be comprehensive, approximately 6-8 sentences long (around 150-200 words). It must capture the main topics and key findings. Crucially, ensure the summary includes specific examples, important terms, likely key search terms, mentions of product types (e.g., water bottles, food packaging), and relevant category mentions (e.g., health impacts, environmental sources) if present in the article. The primary goal is to provide enough detail to significantly improve searchability for these specific keywords and concepts within the article's content. Respond with only the summary.`;
     try {
-        console.log(`Requesting summary for: "${title}"`);
+        console.log(`Requesting detailed summary for: "${title}"`);
         const completion = await openai.chat.completions.create({
-            model: "gpt-3.5-turbo", messages: [{ role: "user", content: prompt }], max_tokens: 120, temperature: 0.5, n: 1,
+            model: "gpt-3.5-turbo", 
+            messages: [{ role: "user", content: prompt }], 
+            max_tokens: 250, // Increased max_tokens for more detailed summary
+            temperature: 0.5, 
+            n: 1,
         });
         const summary = completion.choices[0]?.message?.content?.trim();
         console.log(`Generated summary: ${summary}`);
@@ -368,42 +367,36 @@ app.get('/api/search-queries', (req, res) => {
 app.get('/api/latest-news', async (req, res) => {
   if (!supabase) {
       console.error('/api/latest-news: Supabase client not available.');
-      // Don't cache errors on the CDN
       res.setHeader('Cache-Control', 'no-store'); 
       return res.status(503).json({ error: 'Database client not available.' });
   }
-
+  console.log('[BACKEND /api/latest-news] Attempting to fetch news...');
   try {
-      // Fetch latest news items, ordered by processed_at descending
-      // Adjust limit as needed
       const { data, error } = await supabase
           .from('latest_news')
           .select('*') 
-          .order('processed_at', { ascending: false })
-          .limit(50); // Example limit
+          .order('processed_at', { ascending: false });
 
       if (error) {
-          console.error('Error fetching latest news:', error);
-          // Don't cache errors on the CDN
+          console.error('[BACKEND /api/latest-news] Supabase error:', error);
           res.setHeader('Cache-Control', 'no-store'); 
           throw error;
       }
 
-      // Set Cache-Control header for Vercel Edge Caching and browsers
-      // Cache for 1 hour (3600 seconds), allow serving stale for 1 day while revalidating
-      res.setHeader('Cache-Control', 'public, max-age=3600, stale-while-revalidate=86400');
+      console.log('[BACKEND /api/latest-news] Supabase returned items count:', (data || []).length);
+      if (data && data.length > 0) {
+        console.log('[BACKEND /api/latest-news] First item from Supabase:', data[0].id, data[0].title);
+      }
 
-      // Send the data
-      res.status(200).json(data || []); // Ensure we return an array even if data is null
+      res.setHeader('Cache-Control', 'public, max-age=3600, stale-while-revalidate=86400');
+      res.status(200).json(data || []);
 
   } catch (error) {
-      // Ensure Cache-Control is set to no-store if not already
       if (!res.getHeader('Cache-Control')) {
           res.setHeader('Cache-Control', 'no-store');
       }
-      // Log the error if it wasn't the Supabase fetch error already logged
-      if (!error.message?.includes('fetching latest news')) { // Avoid double logging
-          console.error('Unexpected error in /api/latest-news:', error);
+      if (!error.message?.includes('fetching latest news')) {
+          console.error('[BACKEND /api/latest-news] Unexpected critical error:', error);
       }
       res.status(500).json({ error: 'Failed to fetch latest news.' });
   }
@@ -510,5 +503,15 @@ app.post('/api/trigger-fetch', async (req, res) => {
 //   console.log(`Backend server listening on port ${port}`);
 // });
 
-// Export the Express API
-module.exports = app; 
+// Export the Express API for Vercel
+module.exports = app;
+
+// For local direct testing with `node api/index.js`
+// This block will only run if the file is executed directly by Node,
+// and not when it's just `require`d by Vercel's runtime.
+if (require.main === module) {
+  const localPort = process.env.PORT || 3001; // Use PORT from .env if available, else 3001
+  app.listen(localPort, () => {
+    console.log(`Backend server listening directly on http://localhost:${localPort}`);
+  });
+} 

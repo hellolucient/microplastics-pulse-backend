@@ -22,8 +22,9 @@
   ],
   "crons": [
     {
-      "path": "/api/scheduled-fetch",
-      "schedule": "0 8 * * *" 
+      "path": "/api/trigger-fetch",
+      "schedule": "0 8 * * *",
+      "body": { "queryIndex": 0 }
     }
   ]
 } 
