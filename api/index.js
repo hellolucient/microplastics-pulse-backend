@@ -404,7 +404,13 @@ app.get('/api/latest-news', async (req, res) => {
 
 // Manual Trigger Fetch Endpoint (Processes ONE query per call, stops on quota error)
 app.post('/api/trigger-fetch', async (req, res) => {
-  const { queryIndex } = req.body;
+  let { queryIndex } = req.body; // Make queryIndex mutable
+
+  // If queryIndex is not provided in the body (e.g., from cron), default to 0
+  if (queryIndex === undefined) {
+    queryIndex = 0;
+    console.log('queryIndex not found in req.body, defaulting to 0 for cron job.');
+  }
 
   // Define the list of queries here (or fetch/require from a shared location)
   const searchQueries = [
@@ -439,7 +445,7 @@ app.post('/api/trigger-fetch', async (req, res) => {
   ];
 
   if (typeof queryIndex !== 'number' || queryIndex < 0 || queryIndex >= searchQueries.length) {
-    return res.status(400).json({ error: 'Invalid or missing queryIndex.' });
+    return res.status(400).json({ error: 'Invalid queryIndex after potential defaulting.', providedIndex: req.body.queryIndex });
   }
 
   const currentQuery = searchQueries[queryIndex];
