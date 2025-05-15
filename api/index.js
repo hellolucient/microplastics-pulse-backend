@@ -172,11 +172,13 @@ async function generateAndStoreImage(title, articleUrl) {
     try {
         console.log(`Requesting DALL-E image for: "${title}" with new prompt.`);
         const imageResponsePromise = openai.images.generate({
-            model: "dall-e-2",
+            model: "dall-e-3",
             prompt: prompt,
             n: 1,
-            size: "512x512",
+            size: "1024x1024",
             response_format: "url",
+            quality: "standard",
+            style: "natural"
         });
         
         // Timeout for DALL-E image generation (e.g., 30 seconds)
