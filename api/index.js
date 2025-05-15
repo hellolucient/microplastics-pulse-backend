@@ -156,60 +156,86 @@ async function generateAndStoreImage(title, articleUrl) {
         console.error("generateAndStoreImage: OpenAI client not available.");
         return null;
     }
+    if (!process.env.BLOB_READ_WRITE_TOKEN) {
+        console.warn("generateAndStoreImage: BLOB_READ_WRITE_TOKEN is not set. Skipping image generation.");
+        return null;
+    }
     if (!title || !articleUrl) {
         console.error("generateAndStoreImage: Missing title or articleUrl.");
         return null;
     }
 
     const prompt = `A compelling and relevant news-style image for an article titled: "${title.substring(0, 150)}". The image should be suitable for a news website, visually engaging, and directly related to the potential themes of the article. Avoid text in the image.`;
+    let tempImageUrl;
 
     try {
         console.log(`Requesting DALL-E image for: "${title}"`);
-        const imageResponse = await openai.images.generate({
-            model: "dall-e-2", // Or "dall-e-3" if available and preferred
+        const imageResponsePromise = openai.images.generate({
+            model: "dall-e-2",
             prompt: prompt,
             n: 1,
-            size: "512x512", // Available sizes: 256x256, 512x512, 1024x1024 for DALL-E 2
-            response_format: "url", // Gets a temporary URL for the image
+            size: "512x512",
+            response_format: "url",
         });
+        
+        // Timeout for DALL-E image generation (e.g., 30 seconds)
+        const imageResponse = await Promise.race([
+            imageResponsePromise,
+            new Promise((_, reject) => setTimeout(() => reject(new Error('DALL-E image generation timed out after 30 seconds')), 30000))
+        ]);
 
-        const tempImageUrl = imageResponse.data?.[0]?.url;
+        tempImageUrl = imageResponse.data?.[0]?.url;
         if (!tempImageUrl) {
-            console.error("DALL-E did not return an image URL.");
+            console.error("DALL-E did not return an image URL or timed out.");
             return null;
         }
         console.log(`DALL-E temporary image URL: ${tempImageUrl}`);
 
-        // Fetch the image data from the temporary URL
-        const imageBufferResponse = await axios.get(tempImageUrl, { responseType: 'arraybuffer' });
+        // Fetch the image data from the temporary URL with timeout (e.g., 15 seconds)
+        const imageBufferResponsePromise = axios.get(tempImageUrl, { 
+            responseType: 'arraybuffer', 
+        });
+        const imageBufferResponse = await Promise.race([
+            imageBufferResponsePromise,
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Fetching image data from DALL-E URL timed out after 15 seconds')), 15000))
+        ]);
+        
         const imageBuffer = imageBufferResponse.data;
 
         if (!imageBuffer) {
-            console.error("Failed to fetch image data from DALL-E URL.");
+            console.error("Failed to fetch image data from DALL-E URL or timed out.");
             return null;
         }
 
-        // Sanitize articleUrl to create a safe filename part
         const sanitizedUrlPart = articleUrl.replace(/[^a-zA-Z0-9-_]/g, '_').substring(0, 100);
         const filename = `article-images/${sanitizedUrlPart}-${Date.now()}.png`;
 
         console.log(`Uploading image to Vercel Blob as: ${filename}`);
-        const blob = await put(filename, imageBuffer, {
+        // Timeout for Vercel Blob upload (e.g., 15 seconds)
+        const blobPromise = put(filename, imageBuffer, {
             access: 'public',
             contentType: 'image/png',
-            addRandomSuffix: false, // Filename should be unique enough with timestamp
+            addRandomSuffix: false,
+            token: process.env.BLOB_READ_WRITE_TOKEN // Explicitly pass the token
         });
+        const blob = await Promise.race([
+            blobPromise,
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Vercel Blob upload timed out after 15 seconds')), 15000))
+        ]);
 
         console.log(`Image successfully uploaded to Vercel Blob: ${blob.url}`);
         return blob.url;
 
     } catch (error) {
-        console.error('Error in generateAndStoreImage:', error.response ? `${error.message} - ${JSON.stringify(error.response.data)}` : error.message);
+        console.error('Error or timeout in generateAndStoreImage:', error.message);
         if (error.response?.data?.error?.code === 'billing_hard_limit_reached') {
             console.error("OpenAI DALL-E request failed: Billing hard limit reached. Cannot generate image.");
-            // Potentially set a flag to stop further image generation attempts for a while
-        }
-        return null;
+        } else if (error.message && (error.message.includes('timed out') || error.code === 'ECONNABORTED' || error.code === 'ECONNRESET')) {
+            console.warn(`A timeout occurred during image generation/storage for "${title}": ${error.message}`);
+        } else if (error.response) { // Log Axios error details if available
+            console.error(`Error details from API call: Status ${error.response.status}, Data: ${JSON.stringify(error.response.data)}`);
+        }        
+        return null; // Ensure null is returned on any error/timeout to allow main loop to continue
     }
 }
 
