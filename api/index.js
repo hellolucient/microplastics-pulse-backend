@@ -165,11 +165,12 @@ async function generateAndStoreImage(title, articleUrl) {
         return null;
     }
 
-    const prompt = `A compelling and relevant news-style image for an article titled: "${title.substring(0, 150)}". The image should be suitable for a news website, visually engaging, and directly related to the potential themes of the article. Avoid text in the image.`;
+    const new_prompt = `Identify the key message, emotional tone, and visual symbols associated with the story titled \"${title.substring(0, 150)}\". Then generate a realistic, editorial-style photo illustration that communicates the core theme of the article without using any text. Focus on real-world elements, people, settings, or symbolic objects that align with the story's main point. Avoid surreal or exaggerated elements—keep it grounded and emotionally resonant. Use cinematic lighting or natural daylight depending on the mood of the article. No watermarks, logos, or text should appear in the image.`;
+    const prompt = new_prompt;
     let tempImageUrl;
 
     try {
-        console.log(`Requesting DALL-E image for: "${title}"`);
+        console.log(`Requesting DALL-E image for: "${title}" with new prompt.`);
         const imageResponsePromise = openai.images.generate({
             model: "dall-e-2",
             prompt: prompt,
