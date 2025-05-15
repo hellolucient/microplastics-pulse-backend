@@ -672,16 +672,20 @@ app.post('/api/batch-update-stories', async (req, res) => {
   const { batch_size = 2, continue_token } = req.body;
   
   try {
-    // Build the query to get all stories, ordered by processed_at (oldest first)
-    let query = supabase.from('latest_news').select('*');
+    // Build the query to get stories where ai_image_url is NULL
+    let query = supabase
+      .from('latest_news')
+      .select('*')
+      .is('ai_image_url', null); // Filter for stories where ai_image_url is NULL
     
-    // If we have a continue token (last processed ID), start after that ID
+    // If we have a continue token (last processed ID from the previous batch of NULL image stories),
+    // start after that ID. We order by 'id' for consistent pagination.
     if (continue_token) {
       query = query.gt('id', continue_token);
     }
     
-    // Order by processed_at ascending to get oldest stories first, then by ID
-    query = query.order('processed_at', { ascending: true }).order('id').limit(batch_size);
+    // Order by 'id' to ensure consistent batching when using continue_token
+    query = query.order('id', { ascending: true }).limit(batch_size);
     
     const { data: stories, error } = await query;
     
@@ -789,11 +793,13 @@ app.post('/api/batch-update-stories', async (req, res) => {
     }
     
     // Return results and a continue token if more processing is needed
+    // The 'done' flag is true if the number of stories processed is less than the batch_size,
+    // indicating no more stories matching the criteria (ai_image_url is NULL) were found in this batch.
     return res.status(200).json({
       message: `Processed ${stories.length} stories`,
       results,
-      continue_token: lastProcessedId,
-      done: stories.length < batch_size
+      continue_token: lastProcessedId, // This will be the ID of the last story processed in this batch
+      done: stories.length < batch_size 
     });
     
   } catch (error) {
