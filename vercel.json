@@ -23,7 +23,7 @@
   "crons": [
     {
       "path": "/api/trigger-fetch",
-      "schedule": "0 8 * * *"
+      "schedule": "30 5 * * *"
     }
   ]
 } 
