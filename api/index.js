@@ -64,7 +64,7 @@ async function fetchArticlesFromGoogle(query, numResults = 10) {
 
     try {
         console.log(`Fetching Google results for query: "${query}"`);
-        const response = await axios.get(apiUrl, { params });
+        const response = await axios.get(apiUrl, { params, timeout: 25000 }); // 25 seconds timeout
         if (response.data && response.data.items) {
             const articles = response.data.items.map(item => ({ title: item.title, link: item.link, snippet: item.snippet }));
             console.log(`Found ${articles.length} results from Google.`);
@@ -78,6 +78,12 @@ async function fetchArticlesFromGoogle(query, numResults = 10) {
     } catch (error) {
         const status = error.response?.status;
         const errorMessage = error.response?.data?.error?.message || error.message;
+        
+        if (error.code === 'ECONNABORTED') {
+            console.error(`Google API call timed out for query: "${query}" after 25 seconds.`);
+            return { success: false, error: { status: 'TIMEOUT', message: 'Google API call timed out.' } };
+        }
+        
         console.error('Error fetching from Google Custom Search:', error.response ? `${error.message} - Status: ${status}` : error.message);
         if (error.response && error.response.data) console.error('Google API Error Details:', errorMessage);
         // Return failure object with error details
@@ -211,7 +217,7 @@ async function generateAndStoreImage(title, articleUrl) {
 /**
  * Fetches articles for a given query, processes new ones, and saves to DB.
  * @returns {Promise<{status: string, count: number}>} An object indicating the outcome:
- *          - status: 'success', 'quota_error', 'google_api_error', 'db_error', 'no_client_error'
+ *          - status: 'success', 'quota_error', 'google_api_error', 'db_error', 'no_client_error', 'google_timeout_error'
  *          - count: Number of articles added (only relevant on 'success')
  */
 async function processQueryAndSave(query) {
@@ -231,6 +237,9 @@ async function processQueryAndSave(query) {
         if (googleResponse.error?.status === 429) {
             console.warn(`Google Search API quota exceeded for query "${query}".`);
             return { status: 'quota_error', count: 0 }; // Specific status for quota
+        } else if (googleResponse.error?.status === 'TIMEOUT') {
+            console.warn(`Google Search API call timed out for query "${query}".`);
+            return { status: 'google_timeout_error', count: 0 };
         } else {
             // Other Google API errors
             return { status: 'google_api_error', count: 0 };
@@ -536,6 +545,15 @@ app.post('/api/trigger-fetch', async (req, res) => {
         return res.status(429).json({
             error: 'Google Search API quota exceeded.',
             message: `Processing stopped at query index ${queryIndex} due to quota limit. Please try again later.`,
+            query: currentQuery,
+            processedCount: result.count, // Will be 0
+            nextIndex: null // Indicate we stopped
+        });
+    } else if (result.status === 'google_timeout_error') {
+        console.warn(`Stopping manual fetch due to Google API timeout on query index ${queryIndex}.`);
+        return res.status(504).json({ // Using 504 to indicate upstream timeout
+            error: 'Google Search API call timed out.',
+            message: `Processing stopped at query index ${queryIndex} because the Google API call timed out.`,
             query: currentQuery,
             processedCount: result.count, // Will be 0
             nextIndex: null // Indicate we stopped
