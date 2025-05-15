@@ -10,7 +10,7 @@
  *   node scripts/batch-update-stories.js [batch_size]
  *   
  * Where:
- *   batch_size - Optional. Number of stories to process per batch (default: 5)
+ *   batch_size - Optional. Number of stories to process per batch (default: 2)
  */
 
 const axios = require('axios');
@@ -18,8 +18,8 @@ require('dotenv').config();
 
 // Configuration
 const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:3001';
-const BATCH_SIZE = parseInt(process.argv[2]) || 5; // Default batch size
-const DELAY_BETWEEN_BATCHES_MS = 5000; // 5 seconds between batches
+const BATCH_SIZE = parseInt(process.argv[2]) || 2; // Default batch size: 2 stories
+const DELAY_BETWEEN_BATCHES_MS = 5 * 60 * 1000; // 5 minutes between batches
 
 async function processBatch(continueToken = null) {
   try {
@@ -72,7 +72,7 @@ async function processBatch(continueToken = null) {
 async function main() {
   console.log('\n🔄 Starting batch update process');
   console.log(`📊 Batch size: ${BATCH_SIZE} stories per request`);
-  console.log(`⏱️  Delay between batches: ${DELAY_BETWEEN_BATCHES_MS / 1000} seconds`);
+  console.log(`⏱️  Delay between batches: ${DELAY_BETWEEN_BATCHES_MS / 60000} minutes`);
   
   let continueToken = null;
   let isComplete = false;
@@ -96,7 +96,8 @@ async function main() {
       batchNumber++;
       
       // Wait before next batch
-      console.log(`\n⏳ Waiting ${DELAY_BETWEEN_BATCHES_MS / 1000} seconds before next batch...`);
+      const waitUntil = new Date(new Date().getTime() + DELAY_BETWEEN_BATCHES_MS);
+      console.log(`\n⏳ Taking a 5-minute break until ${waitUntil.toLocaleTimeString()} before processing next batch...`);
       await new Promise(resolve => setTimeout(resolve, DELAY_BETWEEN_BATCHES_MS));
     }
   }

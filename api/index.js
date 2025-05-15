@@ -181,10 +181,10 @@ async function generateAndStoreImage(title, articleUrl) {
             style: "natural"
         });
         
-        // Timeout for DALL-E image generation (e.g., 60 seconds)
+        // Timeout for DALL-E image generation (e.g., 120 seconds)
         const imageResponse = await Promise.race([
             imageResponsePromise,
-            new Promise((_, reject) => setTimeout(() => reject(new Error('DALL-E image generation timed out after 60 seconds')), 60000))
+            new Promise((_, reject) => setTimeout(() => reject(new Error('DALL-E image generation timed out after 120 seconds')), 120000))
         ]);
 
         tempImageUrl = imageResponse.data?.[0]?.url;
@@ -669,7 +669,7 @@ app.post('/api/batch-update-stories', async (req, res) => {
   if (!supabase) return res.status(503).json({ error: 'Database client not available.' });
   if (!openai) return res.status(503).json({ error: 'OpenAI client not available.' });
   
-  const { batch_size = 10, continue_token } = req.body;
+  const { batch_size = 2, continue_token } = req.body;
   
   try {
     // Build the query to get all stories, ordered by processed_at (oldest first)
@@ -783,8 +783,9 @@ app.post('/api/batch-update-stories', async (req, res) => {
         });
       }
       
-      // Add a small delay between API calls to avoid rate limits
-      await new Promise(resolve => setTimeout(resolve, 500));
+      // Add a longer delay between API calls to avoid rate limits
+      console.log(`Waiting 2 seconds before processing next story...`);
+      await new Promise(resolve => setTimeout(resolve, 2000));
     }
     
     // Return results and a continue token if more processing is needed
