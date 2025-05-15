@@ -485,17 +485,8 @@ app.get('/api/latest-news', async (req, res) => {
   }
 });
 
-// Manual Trigger Fetch Endpoint (Processes ONE query per call, stops on quota error)
-app.post('/api/trigger-fetch', async (req, res) => {
-  let { queryIndex } = req.body; // Make queryIndex mutable
-
-  // If queryIndex is not provided in the body (e.g., from cron), default to 0
-  if (queryIndex === undefined) {
-    queryIndex = 0;
-    console.log('queryIndex not found in req.body, defaulting to 0 for cron job.');
-  }
-
-  // Define the list of queries here (or fetch/require from a shared location)
+// Manual Trigger Fetch Endpoint (Processes ONE query per call for POST, ALL for GET/cron)
+app.all('/api/trigger-fetch', async (req, res) => {
   const searchQueries = [
       "latest research microplastics human health site:nature.com OR site:sciencedirect.com",
       "global microplastic pollution report 2025 site:who.int OR site:unep.org",
@@ -527,71 +518,119 @@ app.post('/api/trigger-fetch', async (req, res) => {
       "research gaps in microplastic and human health site:thelancet.com OR site:who.int"
   ];
 
-  if (typeof queryIndex !== 'number' || queryIndex < 0 || queryIndex >= searchQueries.length) {
-    return res.status(400).json({ error: 'Invalid queryIndex after potential defaulting.', providedIndex: req.body.queryIndex });
-  }
+  // Check if it's a cron job (likely GET request) or manual trigger (POST request)
+  const isCronJob = req.method === 'GET'; 
 
-  const currentQuery = searchQueries[queryIndex];
-  console.log(`Manual fetch triggered for query #${queryIndex}: "${currentQuery}"`);
+  if (isCronJob) {
+    console.log('Cron job invocation (GET /api/trigger-fetch): Starting full fetch cycle.');
+    let totalAddedByCron = 0;
+    let errorsInCron = [];
+    let queriesProcessedByCron = 0;
 
-  try {
-    // Call processQueryAndSave and get the result object
-    const result = await processQueryAndSave(currentQuery);
+    for (let i = 0; i < searchQueries.length; i++) {
+      const currentQuery = searchQueries[i];
+      queriesProcessedByCron++;
+      console.log(`Cron: Processing query #${i + 1}/${searchQueries.length}: "${currentQuery}"`);
+      try {
+        const result = await processQueryAndSave(currentQuery); // processQueryAndSave expects the query string
+        if (result.status === 'success') {
+          totalAddedByCron += result.count;
+          console.log(`Cron: Query "${currentQuery}" successful. Added: ${result.count}`);
+        } else {
+          const errorMessage = `Cron: Query "${currentQuery}" failed. Status: ${result.status}, Details: ${JSON.stringify(result.error || result.message || 'N/A')}`;
+          console.error(errorMessage);
+          errorsInCron.push({ query: currentQuery, status: result.status, error: result.error || result.message });
+          
+          if (result.status === 'quota_error' || result.status === 'google_timeout_error') {
+            console.warn(`Cron: Stopping further processing due to ${result.status} on query "${currentQuery}".`);
+            break; 
+          }
+        }
+      } catch (loopError) {
+        const errorMessage = `Cron: Unexpected error during processing of query "${currentQuery}": ${loopError.message}`;
+        console.error(errorMessage, loopError);
+        errorsInCron.push({ query: currentQuery, status: 'loop_exception', error: loopError.message });
+        break; // Stop on unexpected errors
+      }
+    }
+    console.log(`Cron job finished. Processed ${queriesProcessedByCron}/${searchQueries.length} queries. Total articles added: ${totalAddedByCron}. Errors: ${errorsInCron.length}`);
+    return res.status(200).json({ 
+        message: 'Cron fetch cycle completed.', 
+        queriesProcessed: queriesProcessedByCron,
+        totalQueries: searchQueries.length,
+        totalAdded: totalAddedByCron, 
+        errors: errorsInCron 
+    });
 
-    // Check the status from processQueryAndSave
-    if (result.status === 'quota_error') {
-        // Stop immediately and return 429
-        console.warn(`Stopping manual fetch due to Google API quota limit hit on query index ${queryIndex}.`);
+  } else if (req.method === 'POST') { // Manual trigger from Admin Panel
+    let { queryIndex } = req.body;
+
+    if (queryIndex === undefined) {
+        // This case should ideally not be hit if frontend always sends queryIndex for POST
+        console.warn('/api/trigger-fetch POST: queryIndex not found in req.body, defaulting to 0. This might indicate an issue with the client request.');
+        queryIndex = 0; 
+    }
+
+    if (typeof queryIndex !== 'number' || queryIndex < 0 || queryIndex >= searchQueries.length) {
+      return res.status(400).json({ error: 'Invalid queryIndex provided.', providedIndex: req.body.queryIndex, totalQueries: searchQueries.length });
+    }
+
+    const currentQuery = searchQueries[queryIndex];
+    console.log(`Manual fetch (POST /api/trigger-fetch) for query #${queryIndex + 1}/${searchQueries.length}: "${currentQuery}"`);
+
+    try {
+      const result = await processQueryAndSave(currentQuery);
+
+      if (result.status === 'success') {
+        const addedCount = result.count;
+        const nextIndex = (queryIndex + 1 < searchQueries.length) ? queryIndex + 1 : null;
+        console.log(`Query #${queryIndex + 1} ("${currentQuery}") processed successfully. Added: ${addedCount}. Next index: ${nextIndex}`);
+        return res.status(200).json({
+          message: `Query ${queryIndex + 1}/${searchQueries.length} processed successfully.`, 
+          query: currentQuery,
+          addedCount: addedCount,
+          nextIndex: nextIndex
+        });
+      } else if (result.status === 'quota_error') {
+        console.warn(`Stopping manual fetch due to Google API quota limit hit on query index ${queryIndex} ("${currentQuery}").`);
         return res.status(429).json({
             error: 'Google Search API quota exceeded.',
             message: `Processing stopped at query index ${queryIndex} due to quota limit. Please try again later.`,
             query: currentQuery,
-            processedCount: result.count, // Will be 0
-            nextIndex: null // Indicate we stopped
+            processedCount: result.count, 
+            nextIndex: null 
         });
-    } else if (result.status === 'google_timeout_error') {
-        console.warn(`Stopping manual fetch due to Google API timeout on query index ${queryIndex}.`);
-        return res.status(504).json({ // Using 504 to indicate upstream timeout
+      } else if (result.status === 'google_timeout_error') {
+        console.warn(`Stopping manual fetch due to Google API timeout on query index ${queryIndex} ("${currentQuery}").`);
+        return res.status(504).json({ 
             error: 'Google Search API call timed out.',
             message: `Processing stopped at query index ${queryIndex} because the Google API call timed out.`,
             query: currentQuery,
-            processedCount: result.count, // Will be 0
-            nextIndex: null // Indicate we stopped
+            processedCount: result.count, 
+            nextIndex: null 
         });
-    } else if (result.status !== 'success') {
-        // Handle other errors reported by processQueryAndSave (e.g., 'google_api_error', 'db_error')
-        console.error(`Stopping manual fetch due to an error (${result.status}) during processing of query index ${queryIndex}.`);
+      } else { // Other errors like 'db_error', 'google_api_error'
+        console.error(`Stopping manual fetch due to an error (${result.status}) during processing of query index ${queryIndex} ("${currentQuery}"). Details: ${JSON.stringify(result.error || result.message)}`);
         return res.status(500).json({
             error: `An internal error (${result.status}) occurred while processing the query.`,
+            details: result.error || result.message,
             query: currentQuery,
-            processedCount: result.count, // Likely 0
-            nextIndex: null // Indicate we stopped
+            processedCount: result.count, 
+            nextIndex: null 
         });
+      }
+    } catch (error) {
+      console.error(`Unexpected error in POST /api/trigger-fetch for query #${queryIndex} ("${currentQuery}"):`, error);
+      return res.status(500).json({
+        error: 'An unexpected server error occurred.', 
+        details: error.message,
+        query: currentQuery
+      });
     }
-
-    // If status is 'success':
-    const addedCount = result.count;
-    const nextIndex = (queryIndex + 1 < searchQueries.length) ? queryIndex + 1 : null;
-
-    console.log(`Query #${queryIndex} processed successfully. Added: ${addedCount}. Next index: ${nextIndex}`);
-    // Return 200 OK with the result for this query index
-    res.status(200).json({
-      message: `Query ${queryIndex + 1}/${searchQueries.length} processed successfully.`, 
-      query: currentQuery,
-      addedCount: addedCount,
-      nextIndex: nextIndex
-    });
-
-  } catch (error) {
-    // This outer catch handles unexpected errors *within* the /api/trigger-fetch endpoint itself,
-    // or errors thrown explicitly from processQueryAndSave if we were to change it to throw.
-    // Errors handled internally by processQueryAndSave (like quota) won't reach here.
-    console.error(`Unexpected error in /api/trigger-fetch for query #${queryIndex} ("${currentQuery}"):`, error);
-    res.status(500).json({
-      error: `An unexpected error occurred while setting up processing for query #${queryIndex}.`, 
-      details: error.message,
-      query: currentQuery
-    });
+  } else {
+    // Handle other methods if necessary, or return 405 Method Not Allowed
+    console.warn(`/api/trigger-fetch called with unhandled method: ${req.method}`);
+    return res.status(405).json({ error: `Method ${req.method} not allowed for /api/trigger-fetch.` });
   }
 });
 
