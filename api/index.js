@@ -181,10 +181,10 @@ async function generateAndStoreImage(title, articleUrl) {
             style: "natural"
         });
         
-        // Timeout for DALL-E image generation (e.g., 30 seconds)
+        // Timeout for DALL-E image generation (e.g., 60 seconds)
         const imageResponse = await Promise.race([
             imageResponsePromise,
-            new Promise((_, reject) => setTimeout(() => reject(new Error('DALL-E image generation timed out after 30 seconds')), 30000))
+            new Promise((_, reject) => setTimeout(() => reject(new Error('DALL-E image generation timed out after 60 seconds')), 60000))
         ]);
 
         tempImageUrl = imageResponse.data?.[0]?.url;
@@ -194,13 +194,13 @@ async function generateAndStoreImage(title, articleUrl) {
         }
         console.log(`DALL-E temporary image URL: ${tempImageUrl}`);
 
-        // Fetch the image data from the temporary URL with timeout (e.g., 15 seconds)
+        // Fetch the image data from the temporary URL with timeout (e.g., 30 seconds)
         const imageBufferResponsePromise = axios.get(tempImageUrl, { 
             responseType: 'arraybuffer', 
         });
         const imageBufferResponse = await Promise.race([
             imageBufferResponsePromise,
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Fetching image data from DALL-E URL timed out after 15 seconds')), 15000))
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Fetching image data from DALL-E URL timed out after 30 seconds')), 30000))
         ]);
         
         const imageBuffer = imageBufferResponse.data;
@@ -214,7 +214,7 @@ async function generateAndStoreImage(title, articleUrl) {
         const filename = `article-images/${sanitizedUrlPart}-${Date.now()}.png`;
 
         console.log(`Uploading image to Vercel Blob as: ${filename}`);
-        // Timeout for Vercel Blob upload (e.g., 15 seconds)
+        // Timeout for Vercel Blob upload (e.g., 30 seconds)
         const blobPromise = put(filename, imageBuffer, {
             access: 'public',
             contentType: 'image/png',
@@ -223,7 +223,7 @@ async function generateAndStoreImage(title, articleUrl) {
         });
         const blob = await Promise.race([
             blobPromise,
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Vercel Blob upload timed out after 15 seconds')), 15000))
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Vercel Blob upload timed out after 30 seconds')), 30000))
         ]);
 
         console.log(`Image successfully uploaded to Vercel Blob: ${blob.url}`);
