@@ -663,6 +663,145 @@ app.all('/api/trigger-fetch', async (req, res) => {
   }
 });
 
+// Update the batch-update-stories endpoint
+app.post('/api/batch-update-stories', async (req, res) => {
+  console.log('[/api/batch-update-stories ENDPOINT HIT] Request received.');
+  if (!supabase) return res.status(503).json({ error: 'Database client not available.' });
+  if (!openai) return res.status(503).json({ error: 'OpenAI client not available.' });
+  
+  const { batch_size = 10, continue_token } = req.body;
+  
+  try {
+    // Build the query to get all stories, ordered by processed_at (oldest first)
+    let query = supabase.from('latest_news').select('*');
+    
+    // If we have a continue token (last processed ID), start after that ID
+    if (continue_token) {
+      query = query.gt('id', continue_token);
+    }
+    
+    // Order by processed_at ascending to get oldest stories first, then by ID
+    query = query.order('processed_at', { ascending: true }).order('id').limit(batch_size);
+    
+    const { data: stories, error } = await query;
+    
+    if (error) {
+      console.error('Error fetching stories for batch update:', error);
+      return res.status(500).json({ error: 'Database error fetching stories.', details: error.message });
+    }
+    
+    if (!stories || stories.length === 0) {
+      return res.status(200).json({ message: 'No more stories found to update.', done: true });
+    }
+    
+    console.log(`Found ${stories.length} stories to refresh.`);
+    
+    // Process each story
+    const results = [];
+    let lastProcessedId = null;
+    
+    for (const story of stories) {
+      console.log(`Processing story: ${story.id} - ${story.title}`);
+      lastProcessedId = story.id;
+      
+      // If we need to fetch Google metadata first (for snippet)
+      let snippet = story.snippet || '';
+      let title = story.title || '';
+      
+      if (!snippet && story.url) {
+        try {
+          console.log(`Fetching metadata for: ${story.url}`);
+          const googleResponse = await fetchArticlesFromGoogle(story.url, 1);
+          
+          if (googleResponse.success && 
+              googleResponse.articles && 
+              googleResponse.articles.length > 0) {
+            const articleData = googleResponse.articles[0];
+            snippet = articleData.snippet || '';
+            
+            // Use Google's title if we don't have one
+            if (!title && articleData.title) {
+              title = articleData.title;
+            }
+          }
+        } catch (err) {
+          console.error(`Error fetching Google data for ${story.url}:`, err);
+          // Continue with what we have
+        }
+      }
+      
+      // Always update both AI summary and image
+      let updates = {};
+      let wasUpdated = false;
+      
+      // Generate new AI summary
+      if (title && snippet) {
+        const ai_summary = await summarizeText(title, snippet);
+        if (ai_summary) {
+          updates.ai_summary = ai_summary;
+          wasUpdated = true;
+        }
+      }
+      
+      // Generate new image
+      if (title && story.url) {
+        const ai_image_url = await generateAndStoreImage(title, story.url);
+        if (ai_image_url) {
+          updates.ai_image_url = ai_image_url;
+          wasUpdated = true;
+        }
+      }
+      
+      // Update the story if we have changes
+      if (wasUpdated) {
+        updates.processed_at = new Date().toISOString();
+        const { error: updateError } = await supabase
+          .from('latest_news')
+          .update(updates)
+          .eq('id', story.id);
+          
+        if (updateError) {
+          console.error(`Error updating story ${story.id}:`, updateError);
+          results.push({ 
+            id: story.id, 
+            success: false, 
+            message: updateError.message 
+          });
+        } else {
+          console.log(`Successfully refreshed story ${story.id}`);
+          results.push({ 
+            id: story.id, 
+            success: true, 
+            updates: Object.keys(updates) 
+          });
+        }
+      } else {
+        results.push({ 
+          id: story.id, 
+          success: true, 
+          message: 'No updates applied' 
+        });
+      }
+      
+      // Add a small delay between API calls to avoid rate limits
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    
+    // Return results and a continue token if more processing is needed
+    return res.status(200).json({
+      message: `Processed ${stories.length} stories`,
+      results,
+      continue_token: lastProcessedId,
+      done: stories.length < batch_size
+    });
+    
+  } catch (error) {
+    console.error('Error in batch update stories:', error);
+    return res.status(500).json({ error: 'Internal server error processing batch.', details: error.message });
+  }
+});
+
+// --- END UPDATED BATCH UPDATE ENDPOINT ---
 
 // --- Remove Server Start ---
 // app.listen(port, () => {
