@@ -814,50 +814,52 @@ app.post('/api/regenerate-image', async (req, res) => {
   if (!supabase) return res.status(503).json({ error: 'Database client not available.' });
   if (!openai) return res.status(503).json({ error: 'OpenAI client not available.' });
 
-  const { article_id } = req.body;
+  let { article_id } = req.body; // Keep as let if we reassign after trim
 
-  if (!article_id) {
-    return res.status(400).json({ error: 'Missing article_id in request body.' });
+  if (!article_id || typeof article_id !== 'string' || article_id.trim() === '') {
+    return res.status(400).json({ error: 'Missing or invalid article_id in request body. Must be a non-empty string.' });
   }
 
-  // Ensure article_id is a number if your DB expects an integer ID
-  const id = parseInt(article_id, 10);
-  if (isNaN(id)) {
-    return res.status(400).json({ error: 'Invalid article_id format. Must be an integer.' });
+  article_id = article_id.trim(); // Trim whitespace
+
+  // Basic UUID format check (optional, but good for early feedback)
+  const uuidRegex = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+  if (!uuidRegex.test(article_id)) {
+    return res.status(400).json({ error: 'Invalid article_id format. Must be a valid UUID.' });
   }
 
   try {
-    // 1. Fetch the article details (title, url) from the database
+    // 1. Fetch the article details (title, url) from the database using the UUID string directly
     const { data: story, error: fetchError } = await supabase
       .from('latest_news')
       .select('id, title, url')
-      .eq('id', id)
+      .eq('id', article_id) // Use article_id (UUID string) directly
       .maybeSingle();
 
     if (fetchError) {
-      console.error(`Error fetching story ${id} for image regeneration:`, fetchError);
+      console.error(`Error fetching story ${article_id} for image regeneration:`, fetchError);
       return res.status(500).json({ error: 'Database error fetching story.', details: fetchError.message });
     }
 
     if (!story) {
-      return res.status(404).json({ error: `Story with ID ${id} not found.` });
+      return res.status(404).json({ error: `Story with ID ${article_id} not found.` });
     }
 
     if (!story.title || !story.url) {
-      return res.status(400).json({ error: `Story with ID ${id} is missing a title or URL, cannot regenerate image.` });
+      return res.status(400).json({ error: `Story with ID ${article_id} is missing a title or URL, cannot regenerate image.` });
     }
 
-    console.log(`Attempting to regenerate image for story ID: ${id}, Title: ${story.title}`);
+    console.log(`Attempting to regenerate image for story ID: ${article_id}, Title: ${story.title}`);
 
     // 2. Generate and store the new image
     const new_ai_image_url = await generateAndStoreImage(story.title, story.url);
 
     if (!new_ai_image_url) {
-      console.error(`Failed to generate a new image for story ID: ${id}`);
+      console.error(`Failed to generate a new image for story ID: ${article_id}`);
       return res.status(500).json({ error: 'Image generation failed. Please check backend logs.' });
     }
 
-    console.log(`New image generated for story ID: ${id}, URL: ${new_ai_image_url}`);
+    console.log(`New image generated for story ID: ${article_id}, URL: ${new_ai_image_url}`);
 
     // 3. Update the story in the database with the new image URL and processed_at
     const updates = {
@@ -868,17 +870,17 @@ app.post('/api/regenerate-image', async (req, res) => {
     const { error: updateError } = await supabase
       .from('latest_news')
       .update(updates)
-      .eq('id', id);
+      .eq('id', article_id); // Use article_id (UUID string) directly
 
     if (updateError) {
-      console.error(`Error updating story ${id} with new image:`, updateError);
+      console.error(`Error updating story ${article_id} with new image:`, updateError);
       return res.status(500).json({ error: 'Database error updating story with new image.', details: updateError.message });
     }
 
-    console.log(`Successfully regenerated image and updated story ID: ${id}`);
+    console.log(`Successfully regenerated image and updated story ID: ${article_id}`);
     return res.status(200).json({ 
-      message: `Image regenerated successfully for story ID: ${id}.`,
-      article_id: id,
+      message: `Image regenerated successfully for story ID: ${article_id}.`,
+      article_id: article_id, // Send back the UUID string
       new_ai_image_url: new_ai_image_url 
     });
 
