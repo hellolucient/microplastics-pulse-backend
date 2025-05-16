@@ -165,7 +165,7 @@ async function generateAndStoreImage(title, articleUrl) {
         return null;
     }
 
-    const new_prompt = `Identify the key message, emotional tone, and visual symbols associated with the story titled \"${title.substring(0, 150)}\". Then generate a realistic, editorial-style photo illustration that communicates the core theme of the article without using any text. Focus on real-world elements, people, settings, or symbolic objects that align with the story's main point. Avoid surreal or exaggerated elements—keep it grounded and emotionally resonant. Use cinematic lighting or natural daylight depending on the mood of the article. No watermarks, logos, or text should appear in the image.`;
+    const new_prompt = `Generate a realistic, editorial-style photo illustration for an article titled \"${title.substring(0, 150)}\". The image must visually communicate the article's core theme using real-world elements, settings, or symbolic objects. **Absolutely no text, letters, words, or numbers should appear anywhere in the image.** If people are depicted, their expressions should be neutral or show subtle concern, reflecting a serious tone without being overly dramatic, distressed, or despairing. Critically, people should not be smiling or appear happy. The overall style must be grounded and avoid surreal or exaggerated elements. Use cinematic lighting or natural daylight appropriate to the article's mood. Ensure no watermarks or logos are present.`;
     const prompt = new_prompt;
     let tempImageUrl;
 
