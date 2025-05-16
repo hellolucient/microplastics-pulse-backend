@@ -808,7 +808,85 @@ app.post('/api/batch-update-stories', async (req, res) => {
   }
 });
 
-// --- END UPDATED BATCH UPDATE ENDPOINT ---
+// New Endpoint to Regenerate Image for a Specific Article ID
+app.post('/api/regenerate-image', async (req, res) => {
+  console.log('[/api/regenerate-image ENDPOINT HIT] Request received.');
+  if (!supabase) return res.status(503).json({ error: 'Database client not available.' });
+  if (!openai) return res.status(503).json({ error: 'OpenAI client not available.' });
+
+  const { article_id } = req.body;
+
+  if (!article_id) {
+    return res.status(400).json({ error: 'Missing article_id in request body.' });
+  }
+
+  // Ensure article_id is a number if your DB expects an integer ID
+  const id = parseInt(article_id, 10);
+  if (isNaN(id)) {
+    return res.status(400).json({ error: 'Invalid article_id format. Must be an integer.' });
+  }
+
+  try {
+    // 1. Fetch the article details (title, url) from the database
+    const { data: story, error: fetchError } = await supabase
+      .from('latest_news')
+      .select('id, title, url')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (fetchError) {
+      console.error(`Error fetching story ${id} for image regeneration:`, fetchError);
+      return res.status(500).json({ error: 'Database error fetching story.', details: fetchError.message });
+    }
+
+    if (!story) {
+      return res.status(404).json({ error: `Story with ID ${id} not found.` });
+    }
+
+    if (!story.title || !story.url) {
+      return res.status(400).json({ error: `Story with ID ${id} is missing a title or URL, cannot regenerate image.` });
+    }
+
+    console.log(`Attempting to regenerate image for story ID: ${id}, Title: ${story.title}`);
+
+    // 2. Generate and store the new image
+    const new_ai_image_url = await generateAndStoreImage(story.title, story.url);
+
+    if (!new_ai_image_url) {
+      console.error(`Failed to generate a new image for story ID: ${id}`);
+      return res.status(500).json({ error: 'Image generation failed. Please check backend logs.' });
+    }
+
+    console.log(`New image generated for story ID: ${id}, URL: ${new_ai_image_url}`);
+
+    // 3. Update the story in the database with the new image URL and processed_at
+    const updates = {
+      ai_image_url: new_ai_image_url,
+      processed_at: new Date().toISOString() // Update processed_at timestamp
+    };
+
+    const { error: updateError } = await supabase
+      .from('latest_news')
+      .update(updates)
+      .eq('id', id);
+
+    if (updateError) {
+      console.error(`Error updating story ${id} with new image:`, updateError);
+      return res.status(500).json({ error: 'Database error updating story with new image.', details: updateError.message });
+    }
+
+    console.log(`Successfully regenerated image and updated story ID: ${id}`);
+    return res.status(200).json({ 
+      message: `Image regenerated successfully for story ID: ${id}.`,
+      article_id: id,
+      new_ai_image_url: new_ai_image_url 
+    });
+
+  } catch (error) {
+    console.error(`Unexpected error in /api/regenerate-image for ID ${article_id}:`, error);
+    return res.status(500).json({ error: 'Internal server error regenerating image.', details: error.message });
+  }
+});
 
 // --- Remove Server Start ---
 // app.listen(port, () => {
