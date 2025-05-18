@@ -890,10 +890,51 @@ app.post('/api/regenerate-image', async (req, res) => {
   }
 });
 
-// --- Remove Server Start ---
-// app.listen(port, () => {
-//   console.log(`Backend server listening on port ${port}`);
-// });
+// --- New Whitepaper Signup Endpoint ---
+app.post('/api/whitepaper-signup', async (req, res) => {
+  if (!supabase) {
+    console.error('/api/whitepaper-signup: Supabase client not available.');
+    return res.status(503).json({ error: 'Database client not available. Cannot save email.' });
+  }
+
+  const { email } = req.body;
+
+  if (!email || typeof email !== 'string') {
+    return res.status(400).json({ error: 'Email is required and must be a string.' });
+  }
+
+  // Basic email validation regex (more robust validation can be added)
+  if (!/\S+@\S+\.\S+/.test(email)) {
+    return res.status(400).json({ error: 'Invalid email format.' });
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('whitepaper_leads')
+      .insert([{ email: email.toLowerCase() }]) // Store email in lowercase to avoid duplicates
+      .select(); // Optionally select to confirm or get the ID
+
+    if (error) {
+      // Handle potential duplicate email error (unique constraint violation)
+      if (error.code === '23505') { // PostgreSQL unique violation code
+        console.warn(`Whitepaper signup: Email already exists - ${email}`);
+        // Consider it a success if they already signed up, or return a specific message
+        return res.status(200).json({ message: 'Email already registered. You can download the whitepaper.' });
+      } else {
+        console.error('Supabase error inserting whitepaper lead:', error);
+        return res.status(500).json({ error: 'Database error saving email.' });
+      }
+    }
+
+    console.log(`Whitepaper signup: Email saved - ${email}`, data);
+    return res.status(201).json({ message: 'Email successfully saved. You can now download the whitepaper.' });
+
+  } catch (error) {
+    console.error('Unexpected error in /api/whitepaper-signup:', error);
+    return res.status(500).json({ error: 'An unexpected server error occurred.' });
+  }
+});
+// --- End Whitepaper Signup Endpoint ---
 
 // Export the Express API for Vercel
 module.exports = app;
