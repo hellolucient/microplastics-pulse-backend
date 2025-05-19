@@ -11,8 +11,27 @@ const app = express();
 // const port = process.env.PORT || 3001; // Port is handled by Vercel
 
 // --- Middleware ---
-app.use(cors());
 app.use(express.json()); 
+
+const allowedOrigins = [
+  'https://microplastics-pulse.vercel.app', // Your original Vercel frontend URL
+  'https://www.microplasticswatch.com',    // Your new custom domain
+  'http://localhost:3000',                 // For local development (React default)
+  'http://localhost:5173',                 // For local development (Vite default)
+];
+
+app.use(cors({
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+    if (allowedOrigins.indexOf(origin) === -1) {
+      const msg = 'The CORS policy for this site does not ' +
+                  'allow access from the specified Origin.';
+      return callback(new Error(msg), false);
+    }
+    return callback(null, true);
+  }
+}));
 
 // --- Initialize Clients ---
 const supabaseUrl = process.env.SUPABASE_URL;
