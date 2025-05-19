@@ -470,7 +470,8 @@ app.get('/api/search-queries', (req, res) => {
       "wellness program standards to reduce microplastic exposure site:spaindustry.org",
       "2025 microplastic research priorities wellness industry site:gwi.org OR site:nih.gov",
       "call to action microplastics wellness sustainability site:globalwellnesssummit.com",
-      "research gaps in microplastic and human health site:thelancet.com OR site:who.int"
+      "research gaps in microplastic and human health site:thelancet.com OR site:who.int",
+      "microplastics human health 2025"
   ];
   res.status(200).json({ queries: searchQueries });
 });
@@ -544,7 +545,8 @@ app.all('/api/trigger-fetch', async (req, res) => {
       "wellness program standards to reduce microplastic exposure site:spaindustry.org",
       "2025 microplastic research priorities wellness industry site:gwi.org OR site:nih.gov",
       "call to action microplastics wellness sustainability site:globalwellnesssummit.com",
-      "research gaps in microplastic and human health site:thelancet.com OR site:who.int"
+      "research gaps in microplastic and human health site:thelancet.com OR site:who.int",
+      "microplastics human health 2025"
   ];
 
   // Check if it's a cron job (likely GET request) or manual trigger (POST request)
