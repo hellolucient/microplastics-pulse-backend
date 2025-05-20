@@ -29,9 +29,6 @@
   "functions": {
     "api/index.js": {
       "maxDuration": 300
-    },
-    "api/cron/check-emails": {
-      "maxDuration": 300
     }
   }
 } 
