@@ -1,11 +1,10 @@
 {
   "version": 2,
-  "builds": [
-    {
-      "src": "./api/index.js",
-      "use": "@vercel/node"
+  "functions": {
+    "api/index.js": {
+      "maxDuration": 300
     }
-  ],
+  },
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/index.js" }
   ],
@@ -25,10 +24,5 @@
       "path": "/api/cron/check-emails",
       "schedule": "*/10 * * * *"
     }
-  ],
-  "functions": {
-    "api/index.js": {
-      "maxDuration": 300
-    }
-  }
+  ]
 } 
