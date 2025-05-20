@@ -164,6 +164,9 @@ async function processEmail(emailData, processedEmails) {
                     if (typeof item === 'string' && item.toLowerCase().includes(targetEmail)) {
                         foundTargetRecipient = true;
                         break;
+                    } else if (typeof item === 'object' && item && typeof item.text === 'string' && item.text.toLowerCase().includes(targetEmail)) {
+                        foundTargetRecipient = true;
+                        break;
                     } else if (typeof item === 'object' && item && item.value && typeof item.value === 'string' && item.value.toLowerCase().includes(targetEmail)) {
                         foundTargetRecipient = true;
                         break;
@@ -174,6 +177,10 @@ async function processEmail(emailData, processedEmails) {
                 }
             } else if (typeof rawDeliveredTo === 'string') {
                 if (rawDeliveredTo.toLowerCase().includes(targetEmail)) {
+                    foundTargetRecipient = true;
+                }
+            } else if (typeof rawDeliveredTo === 'object' && rawDeliveredTo && typeof rawDeliveredTo.text === 'string') {
+                if (rawDeliveredTo.text.toLowerCase().includes(targetEmail)) {
                     foundTargetRecipient = true;
                 }
             } else if (typeof rawDeliveredTo === 'object' && rawDeliveredTo && rawDeliveredTo.value && typeof rawDeliveredTo.value === 'string') {
