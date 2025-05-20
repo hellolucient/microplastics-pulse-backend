@@ -1067,11 +1067,12 @@ app.post('/api/submit-article-url', async (req, res) => {
                 {
                     url: articleUrl,
                     title: title || 'Title not available', // Ensure title is not null
-                    summary: summary,
-                    image_url: imageUrl,
+                    ai_summary: summary,
+                    ai_image_url: imageUrl,
                     // Add other relevant fields like:
                     // published_at: new Date().toISOString(), // Or a date from the article if available
                     source: 'email_submission',
+                    processed_at: new Date().toISOString() // Added processed_at for consistency
                     // category: await categorizeText(title, snippet) // Optional: if you want to categorize too
                 },
             ])
