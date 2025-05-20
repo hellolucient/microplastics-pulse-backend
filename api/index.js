@@ -5,6 +5,7 @@ const { createClient } = require('@supabase/supabase-js');
 const { OpenAI } = require('openai');
 const axios = require('axios');
 const { put } = require('@vercel/blob'); // Added Vercel Blob import
+const cheerio = require('cheerio'); // Added Cheerio
 // const cron = require('node-cron'); // Removed for Vercel Serverless
 
 const app = express();
@@ -258,6 +259,45 @@ async function generateAndStoreImage(title, articleUrl) {
             console.error(`Error details from API call: Status ${error.response.status}, Data: ${JSON.stringify(error.response.data)}`);
         }        
         return null; // Ensure null is returned on any error/timeout to allow main loop to continue
+    }
+}
+
+// Helper function to fetch and parse article details (title, snippet)
+async function fetchArticleDetails(articleUrl) {
+    try {
+        console.log(`Fetching article details for URL: ${articleUrl}`);
+        const { data: htmlContent } = await axios.get(articleUrl, { timeout: 15000 }); // 15s timeout
+        const $ = cheerio.load(htmlContent);
+
+        let title = $('title').first().text()?.trim();
+        let snippet = $('meta[name="description"]').attr('content') || $('meta[property="og:description"]').attr('content');
+        snippet = snippet?.trim();
+
+        if (!title) {
+            console.warn(`Could not extract title for ${articleUrl}`);
+            // Fallback: Use a generic title or part of the URL if no title found
+            title = `Article from ${new URL(articleUrl).hostname}`;
+        }
+        if (!snippet) {
+            console.warn(`Could not extract meta description for ${articleUrl}. Using first paragraph as fallback.`);
+            // Fallback: try to get the first paragraph as a snippet
+            snippet = $('p').first().text()?.trim().substring(0, 300); // Limit snippet length
+            if (!snippet) {
+                 console.warn(`Could not extract first paragraph for ${articleUrl}. Snippet will be empty.`);
+                 snippet = ''; // Default to empty if no p tag found
+            }
+        }
+        
+        console.log(`Extracted Title: ${title}, Snippet: ${snippet?.substring(0,100)}...`);
+        return { title, snippet };
+    } catch (error) {
+        console.error(`Error fetching article details for ${articleUrl}:`, error.message);
+        if (error.code === 'ECONNABORTED') {
+            console.error(`Timeout fetching details for ${articleUrl}`);
+        }
+        // In case of error, return null or default values so the process can decide how to proceed
+        // Potentially, we could still try to process with just the URL if title/snippet extraction fails
+        return { title: `Article from ${new URL(articleUrl).hostname}`, snippet: 'Could not fetch details.' }; 
     }
 }
 
@@ -954,6 +994,102 @@ app.post('/api/whitepaper-signup', async (req, res) => {
   }
 });
 // --- End Whitepaper Signup Endpoint ---
+
+app.post('/api/submit-article-url', async (req, res) => {
+    console.log('[POST /api/submit-article-url] Received request:', req.body);
+    const { url: articleUrl } = req.body;
+
+    if (!articleUrl) {
+        return res.status(400).json({ message: 'Missing article URL in request body.' });
+    }
+
+    if (!supabase) {
+        console.error('[POST /api/submit-article-url] Supabase client not initialized.');
+        return res.status(500).json({ message: 'Database service not available.' });
+    }
+    if (!openai) {
+        console.error('[POST /api/submit-article-url] OpenAI client not initialized.');
+        // We might still proceed if only image/summary fails, or return error immediately
+        // return res.status(500).json({ message: 'AI service not available.' }); 
+    }
+
+    try {
+        // 1. Check for duplicates in Supabase
+        console.log(`[POST /api/submit-article-url] Checking for duplicate URL: ${articleUrl}`);
+        const { data: existingArticle, error: selectError } = await supabase
+            .from('latest_news') // Assuming your table is named 'latest_news'
+            .select('url')
+            .eq('url', articleUrl)
+            .maybeSingle(); // Returns one record or null, not an array
+
+        if (selectError) {
+            console.error('[POST /api/submit-article-url] Error checking for duplicate URL:', selectError);
+            return res.status(500).json({ message: 'Error checking for duplicate URL.', details: selectError.message });
+        }
+
+        if (existingArticle) {
+            console.log(`[POST /api/submit-article-url] URL ${articleUrl} already exists in database. Skipping.`);
+            return res.status(200).json({ message: 'URL already processed.', article: existingArticle });
+        }
+
+        console.log(`[POST /api/submit-article-url] URL ${articleUrl} is new. Proceeding with processing.`);
+
+        // 2. Fetch Article Content (Title/Snippet)
+        const { title, snippet } = await fetchArticleDetails(articleUrl);
+        if (!title && !snippet) { // If both are null/empty after fetch attempt
+            console.warn(`[POST /api/submit-article-url] Could not retrieve title or snippet for ${articleUrl}. Processing with URL only.`);
+            // Decide if you want to proceed without title/snippet or return an error
+        }
+
+        // 3. Generate AI Summary
+        let summary = null;
+        if (openai && title && snippet) { // Only attempt if OpenAI is available and we have title/snippet
+            console.log(`[POST /api/submit-article-url] Generating summary for: ${title}`);
+            summary = await summarizeText(title, snippet); // summarizeText should handle its own errors and return null if failed
+        } else {
+            console.warn('[POST /api/submit-article-url] Skipping summary generation (OpenAI not available or missing title/snippet).');
+        }
+
+        // 4. Generate AI Image
+        let imageUrl = null;
+        if (openai && title) { // Only attempt if OpenAI is available and we have a title
+            console.log(`[POST /api/submit-article-url] Generating image for: ${title}`);
+            imageUrl = await generateAndStoreImage(title, articleUrl); // generateAndStoreImage should handle its own errors and return null if failed
+        } else {
+            console.warn('[POST /api/submit-article-url] Skipping image generation (OpenAI not available or missing title).');
+        }
+
+        // 5. Save to Supabase
+        console.log(`[POST /api/submit-article-url] Saving article to Supabase. URL: ${articleUrl}`);
+        const { data: newArticle, error: insertError } = await supabase
+            .from('latest_news')
+            .insert([
+                {
+                    url: articleUrl,
+                    title: title || 'Title not available', // Ensure title is not null
+                    summary: summary,
+                    image_url: imageUrl,
+                    // Add other relevant fields like:
+                    // published_at: new Date().toISOString(), // Or a date from the article if available
+                    source: 'email_submission',
+                    // category: await categorizeText(title, snippet) // Optional: if you want to categorize too
+                },
+            ])
+            .select(); // Return the inserted record(s)
+
+        if (insertError) {
+            console.error('[POST /api/submit-article-url] Error saving article to Supabase:', insertError);
+            return res.status(500).json({ message: 'Error saving article to database.', details: insertError.message });
+        }
+
+        console.log('[POST /api/submit-article-url] Article successfully processed and saved:', newArticle);
+        return res.status(201).json({ message: 'Article processed and saved successfully.', article: newArticle });
+
+    } catch (error) {
+        console.error('[POST /api/submit-article-url] Unexpected error processing article:', error);
+        return res.status(500).json({ message: 'An unexpected error occurred.', details: error.message });
+    }
+});
 
 // Export the Express API for Vercel
 module.exports = app;
