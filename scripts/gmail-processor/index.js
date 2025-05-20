@@ -152,19 +152,53 @@ async function processEmail(emailData, processedEmails) {
             return;
         }
 
-        const deliveredTo = parsed.headers.get('delivered-to') || '';
-        const fromAddress = parsed.from?.value[0]?.address || 'unknown@sender.com';
+        let rawDeliveredTo = parsed.headers.get('delivered-to');
+        let foundTargetRecipient = false;
+        const targetEmail = 'submit@microplasticswatch.com';
+
+        console.log(`Raw 'delivered-to' header from mailparser:`, rawDeliveredTo);
+
+        if (rawDeliveredTo) {
+            if (Array.isArray(rawDeliveredTo)) {
+                for (const item of rawDeliveredTo) {
+                    if (typeof item === 'string' && item.toLowerCase().includes(targetEmail)) {
+                        foundTargetRecipient = true;
+                        break;
+                    } else if (typeof item === 'object' && item && item.value && typeof item.value === 'string' && item.value.toLowerCase().includes(targetEmail)) {
+                        foundTargetRecipient = true;
+                        break;
+                    } else if (typeof item === 'object' && item && item.address && typeof item.address === 'string' && item.address.toLowerCase().includes(targetEmail)) {
+                        foundTargetRecipient = true;
+                        break;
+                    }
+                }
+            } else if (typeof rawDeliveredTo === 'string') {
+                if (rawDeliveredTo.toLowerCase().includes(targetEmail)) {
+                    foundTargetRecipient = true;
+                }
+            } else if (typeof rawDeliveredTo === 'object' && rawDeliveredTo && rawDeliveredTo.value && typeof rawDeliveredTo.value === 'string') {
+                if (rawDeliveredTo.value.toLowerCase().includes(targetEmail)) {
+                    foundTargetRecipient = true;
+                }
+            } else if (typeof rawDeliveredTo === 'object' && rawDeliveredTo && rawDeliveredTo.address && typeof rawDeliveredTo.address === 'string') {
+                if (rawDeliveredTo.address.toLowerCase().includes(targetEmail)) {
+                    foundTargetRecipient = true;
+                }
+            }
+        }
+        
+        const fromAddress = parsed.from?.value[0]?.address?.toLowerCase() || 'unknown@sender.com';
         const textBody = parsed.text || '';
 
         console.log(`Processing email from ${fromAddress} with Message-ID: ${messageId}`);
-        console.log(`Delivered-To: ${deliveredTo}`);
+        console.log(`Was target recipient (${targetEmail}) found in Delivered-To? ${foundTargetRecipient}`);
 
-        if (typeof deliveredTo !== 'string' || !deliveredTo.toLowerCase().includes('submit@microplasticswatch.com')) {
-            console.log(`Skipped: Email not delivered to submit@microplasticswatch.com. Delivered to: ${deliveredTo}`);
+        if (!foundTargetRecipient) {
+            console.log(`Skipped: Email not delivered to ${targetEmail}. Raw Delivered-To was:`, rawDeliveredTo);
             return;
         }
 
-        if (!approvedSenders.includes(fromAddress.toLowerCase())) {
+        if (!approvedSenders.map(s => s.toLowerCase()).includes(fromAddress)) {
             console.log(`Skipped: Sender ${fromAddress} is not in the approved list.`);
             return;
         }
