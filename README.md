@@ -128,6 +128,23 @@ To set up and run the project locally, you'll generally need to:
 *   **Detailed Logging/Monitoring:** Enhanced logging for easier debugging of backend processes.
 *   **Scalability:** For significantly higher traffic or processing loads, a move from serverless to a dedicated server (as discussed) might be necessary, requiring infrastructure management.
 
+## Important Note: Email Processing Cron Job (scripts/gmail-processor/)
+
+**Date: 2025-05-20**
+
+The current email processing script (`scripts/gmail-processor/index.js`), when run via the Vercel Cron Job (`/api/cron/check-emails` which triggers it every 10 minutes), uses a local `processed.json` file to keep track of emails it has already processed. 
+
+**Limitation in Serverless Environment:**
+Due to the ephemeral (temporary) filesystem of Vercel Serverless Functions, this `processed.json` file will likely not persist reliably between cron job invocations. This means the script might re-process the same email messages multiple times.
+
+**Impact:**
+- The downstream API endpoint (`/api/submit-article-url`) has its own robust duplicate check against the Supabase database, so **duplicate articles will NOT be created in your `latest_news` table.**
+- However, the email processing script itself will perform redundant work: re-connecting to Gmail, re-fetching emails it has already seen, re-parsing them, and re-submitting their URLs to the API endpoint (which will then reject them as duplicates).
+- This leads to inefficiency in the email checking step (wasted Gmail API calls, script execution time, and API calls to `/api/submit-article-url`).
+
+**Future Improvement:**
+For a more robust and efficient solution, especially if this cron job is critical, the `scripts/gmail-processor/index.js` script should be modified to store and check processed email `Message-ID`s in a persistent database (e.g., a dedicated table in Supabase) instead of the local `processed.json` file.
+
 ---
 
 This README provides a comprehensive overview of the MicroPlastics Pulse Project. 

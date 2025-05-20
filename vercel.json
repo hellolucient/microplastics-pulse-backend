@@ -22,8 +22,16 @@
   ],
   "crons": [
     {
-      "path": "/api/trigger-fetch",
-      "schedule": "30 5 * * *"
+      "path": "/api/cron/check-emails",
+      "schedule": "*/10 * * * *"
     }
-  ]
+  ],
+  "functions": {
+    "api/index.js": {
+      "maxDuration": 300
+    },
+    "api/cron/check-emails": {
+      "maxDuration": 300
+    }
+  }
 } 

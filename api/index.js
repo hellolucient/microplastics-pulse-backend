@@ -1091,6 +1091,44 @@ app.post('/api/submit-article-url', async (req, res) => {
     }
 });
 
+// Import the main function from the Gmail processor script
+// Adjust the path if your script or api/index.js moves.
+// Assuming api/index.js is in microplastics-pulse-backend/api/
+// and the script is in microplastics-pulse-backend/scripts/gmail-processor/index.js
+let gmailProcessorMain;
+try {
+    gmailProcessorMain = require('../../scripts/gmail-processor/index.js').main; 
+} catch (error) {
+    console.error("Failed to load gmail-processor script for cron job:", error);
+    gmailProcessorMain = null; // Set to null if loading fails
+}
+
+// New Cron Job Endpoint to trigger email check
+app.get('/api/cron/check-emails', async (req, res) => {
+    // Optional: Add a simple security check, e.g., a secret query parameter or header
+    // if (req.headers['x-vercel-cron-secret'] !== process.env.VERCEL_CRON_SECRET) {
+    //     return res.status(401).send('Unauthorized');
+    // }
+
+    console.log('[CRON /api/cron/check-emails] Received request to check emails.');
+
+    if (!gmailProcessorMain) {
+        console.error('[CRON /api/cron/check-emails] Gmail processor script not loaded. Cannot run email check.');
+        return res.status(500).json({ message: 'Email processing script not available.'});
+    }
+
+    try {
+        // Execute the main function from the gmail-processor script
+        // This is an async function, so we await its completion.
+        await gmailProcessorMain();
+        console.log('[CRON /api/cron/check-emails] Email check process completed.');
+        return res.status(200).json({ message: 'Email check process triggered successfully.' });
+    } catch (error) {
+        console.error('[CRON /api/cron/check-emails] Error during email check process:', error);
+        return res.status(500).json({ message: 'Error during email check process.', details: error.message });
+    }
+});
+
 // Export the Express API for Vercel
 module.exports = app;
 

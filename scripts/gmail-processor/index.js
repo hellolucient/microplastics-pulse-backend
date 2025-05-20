@@ -227,4 +227,6 @@ async function main() {
     }
 }
 
-main(); 
+// main(); // Remove direct call if it's only meant to be called by cron or manually as a module
+
+module.exports = { main }; // Export the main function 
