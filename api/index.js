@@ -1095,12 +1095,39 @@ app.post('/api/submit-article-url', async (req, res) => {
 // Adjust the path if your script or api/index.js moves.
 // Assuming api/index.js is in microplastics-pulse-backend/api/
 // and the script is in microplastics-pulse-backend/scripts/gmail-processor/index.js
-let gmailProcessorMain;
+let gmailProcessorModule;
+let gmailProcessorMain; // Ensure it's declared so it can be null
+
 try {
-    gmailProcessorMain = require('../../scripts/gmail-processor/index.js').main; 
+    console.log(`[CRON EMAIL DEBUG] Attempting to load gmail-processor script from path: '../scripts/gmail-processor/index.js'`);
+    gmailProcessorModule = require('../scripts/gmail-processor/index.js'); // Corrected path
+    console.log(`[CRON EMAIL DEBUG] gmail-processor script loaded via require.`);
+    
+    if (gmailProcessorModule) {
+        console.log(`[CRON EMAIL DEBUG] Module loaded. Type: ${typeof gmailProcessorModule}. Keys: ${Object.keys(gmailProcessorModule).join(', ')}`);
+        if (gmailProcessorModule.hasOwnProperty('main')) {
+            console.log(`[CRON EMAIL DEBUG] Module has 'main' property. Type of main: ${typeof gmailProcessorModule.main}`);
+            if (typeof gmailProcessorModule.main === 'function') {
+                gmailProcessorMain = gmailProcessorModule.main;
+                console.log("[CRON EMAIL DEBUG] Successfully assigned gmailProcessorModule.main to gmailProcessorMain.");
+            } else {
+                console.error("[CRON EMAIL DEBUG] Error: gmailProcessorModule.main is not a function.");
+                gmailProcessorMain = null;
+            }
+        } else {
+            console.error("[CRON EMAIL DEBUG] Error: gmailProcessorModule does not have 'main' property.");
+            gmailProcessorMain = null;
+        }
+    } else {
+        console.error("[CRON EMAIL DEBUG] Error: require('../scripts/gmail-processor/index.js') returned null or undefined.");
+        gmailProcessorMain = null;
+    }
 } catch (error) {
-    console.error("Failed to load gmail-processor script for cron job:", error);
-    gmailProcessorMain = null; // Set to null if loading fails
+    console.error("[CRON EMAIL DEBUG] CRITICAL: Failed to load gmail-processor script via require. Error details:", error);
+    // It's important to log the actual error object here
+    if (error && error.message) console.error("[CRON EMAIL DEBUG] Error message:", error.message);
+    if (error && error.stack) console.error("[CRON EMAIL DEBUG] Error stack:", error.stack);
+    gmailProcessorMain = null;
 }
 
 // New Cron Job Endpoint to trigger email check
@@ -1123,8 +1150,8 @@ app.get('/api/cron/check-emails', async (req, res) => {
     console.log('[CRON /api/cron/check-emails] Authorized request received to check emails.');
 
     if (!gmailProcessorMain) {
-        console.error('[CRON /api/cron/check-emails] Gmail processor script not loaded. Cannot run email check.');
-        return res.status(500).json({ message: 'Email processing script not available.'});
+        console.error('[CRON /api/cron/check-emails] Gmail processor script not loaded. Final check failed. Cannot run email check.'); // Modified this log for clarity
+        return res.status(500).json({ message: 'Email processing script not available. Investigation required.'});
     }
 
     try {
