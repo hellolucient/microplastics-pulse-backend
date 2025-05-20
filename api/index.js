@@ -1105,12 +1105,22 @@ try {
 
 // New Cron Job Endpoint to trigger email check
 app.get('/api/cron/check-emails', async (req, res) => {
-    // Optional: Add a simple security check, e.g., a secret query parameter or header
-    // if (req.headers['x-vercel-cron-secret'] !== process.env.VERCEL_CRON_SECRET) {
-    //     return res.status(401).send('Unauthorized');
-    // }
+    // Security check for the cron trigger secret
+    const expectedSecret = process.env.CRON_TRIGGER_SECRET;
+    const receivedSecret = req.headers['x-custom-cron-secret']; // Header names are conventionally lowercase
 
-    console.log('[CRON /api/cron/check-emails] Received request to check emails.');
+    if (!expectedSecret) {
+        // This is a server configuration issue if the secret isn't set.
+        console.error('[CRON /api/cron/check-emails] CRON_TRIGGER_SECRET is not set in server environment.');
+        return res.status(500).send('Internal server configuration error.');
+    }
+
+    if (receivedSecret !== expectedSecret) {
+        console.warn('[CRON /api/cron/check-emails] Unauthorized attempt: Missing or incorrect secret header.');
+        return res.status(401).send('Unauthorized');
+    }
+
+    console.log('[CRON /api/cron/check-emails] Authorized request received to check emails.');
 
     if (!gmailProcessorMain) {
         console.error('[CRON /api/cron/check-emails] Gmail processor script not loaded. Cannot run email check.');
