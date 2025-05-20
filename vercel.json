@@ -1,10 +1,11 @@
 {
   "version": 2,
-  "functions": {
-    "api/index.js": {
-      "maxDuration": 300
+  "builds": [
+    {
+      "src": "./api/index.js",
+      "use": "@vercel/node"
     }
-  },
+  ],
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/index.js" }
   ],
@@ -17,12 +18,6 @@
         { "key": "Access-Control-Allow-Methods", "value": "GET,OPTIONS,PATCH,DELETE,POST,PUT" },
         { "key": "Access-Control-Allow-Headers", "value": "X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization" }
       ]
-    }
-  ],
-  "crons": [
-    {
-      "path": "/api/cron/check-emails",
-      "schedule": "*/10 * * * *"
     }
   ]
 } 
