@@ -1,12 +1,26 @@
 require('dotenv').config({ path: '../../.env' }); // Load .env from backend root
 const Imap = require('imap');
 const { simpleParser } = require('mailparser');
-const fs = require('fs').promises;
+// const fs = require('fs').promises; // Removed fs
 const path = require('path');
 const axios = require('axios');
+const { createClient } = require('@supabase/supabase-js'); // Added Supabase
 
-const processedEmailsPath = path.join(__dirname, 'processed.json');
-const approvedSenders = ['hellolucient@gmail.com', 'trent.munday@gmail.com', 'gerrybodeker@gmail.com']; // Define your approved senders
+// const processedEmailsPath = path.join(__dirname, 'processed.json'); // Removed
+const approvedSenders = ['hellolucient@gmail.com', 'trent.munday@gmail.com', 'gerrybodeker@gmail.com'];
+
+// --- Initialize Supabase Client ---
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_KEY;
+let supabase;
+if (supabaseUrl && supabaseServiceKey) {
+  supabase = createClient(supabaseUrl, supabaseServiceKey);
+  console.log('[GmailProcessor] Supabase client initialized.');
+} else {
+  console.error('[GmailProcessor] Error: SUPABASE_URL or SUPABASE_SERVICE_KEY missing in .env. GmailProcessor may not function correctly for duplicate checks.');
+  // supabase will remain undefined, checks relying on it should fail gracefully or be skipped.
+}
+// --- End Supabase Client Initialization ---
 
 const imapConfig = {
     user: process.env.EMAIL_USER,
@@ -18,30 +32,6 @@ const imapConfig = {
 };
 
 const GENERATION_ENDPOINT = process.env.GENERATION_ENDPOINT || 'https://yourapp.com/api/generate';
-
-async function loadProcessedEmails() {
-    try {
-        const data = await fs.readFile(processedEmailsPath, 'utf8');
-        return JSON.parse(data);
-    } catch (error) {
-        if (error.code === 'ENOENT') {
-            console.log('processed.json not found, starting with an empty set.');
-            return {}; // If file doesn't exist, start with an empty object
-        }
-        console.error('Error loading processed emails:', error);
-        return {}; // In case of other errors, also start fresh or handle appropriately
-    }
-}
-
-async function saveProcessedEmail(messageId, processedEmails) {
-    processedEmails[messageId] = new Date().toISOString();
-    try {
-        await fs.writeFile(processedEmailsPath, JSON.stringify(processedEmails, null, 2));
-        console.log(`Saved Message-ID ${messageId} to processed.json`);
-    } catch (error) {
-        console.error('Error saving processed email:', error);
-    }
-}
 
 function connectToGmail() {
     return new Promise((resolve, reject) => {
@@ -137,18 +127,13 @@ function searchEmails(imap) {
     });
 }
 
-async function processEmail(emailData, processedEmails) {
+async function processEmail(emailData /*, processedEmails - Removed */) {
     try {
         const parsed = await simpleParser(emailData.buffer);
-        const messageId = parsed.messageId;
+        const messageId = parsed.messageId; // Keep for logging for now, but not for primary duplicate check
 
         if (!messageId) {
-            console.log('Skipped: Email missing Message-ID.');
-            return;
-        }
-
-        if (processedEmails[messageId]) {
-            console.log(`Skipped: Message-ID ${messageId} already processed.`);
+            console.log('[GmailProcessor] Skipped: Email missing Message-ID.');
             return;
         }
 
@@ -216,15 +201,45 @@ async function processEmail(emailData, processedEmails) {
         const urlsFound = textBody.match(urlRegex);
 
         if (!urlsFound || urlsFound.length === 0) {
-            console.log('Skipped: No URL found in the email body.');
+            console.log('[GmailProcessor] Skipped: No URL found in the email body.');
             return;
         }
 
         const extractedUrl = urlsFound[0]; // Take the first URL
-        console.log(`Extracted URL: ${extractedUrl}`);
+        console.log(`[GmailProcessor] Extracted URL: ${extractedUrl}`);
+
+        // --- Supabase Duplicate Check ---
+        if (supabase) {
+            try {
+                console.log(`[GmailProcessor] Checking Supabase for duplicate URL: ${extractedUrl}`);
+                const { data: existingArticle, error: dbError } = await supabase
+                    .from('latest_news')
+                    .select('url')
+                    .eq('url', extractedUrl)
+                    .maybeSingle();
+
+                if (dbError) {
+                    console.error(`[GmailProcessor] Supabase error checking for duplicate URL ${extractedUrl}:`, dbError.message);
+                    // Decide if we should proceed or not. For now, let's proceed but log the error.
+                    // Consider returning here if DB check is critical and fails.
+                }
+
+                if (existingArticle) {
+                    console.log(`[GmailProcessor] Skipped: URL ${extractedUrl} already exists in Supabase database.`);
+                    return; // URL already processed and in DB
+                }
+                console.log(`[GmailProcessor] URL ${extractedUrl} is new to Supabase.`);
+            } catch (supaCheckError) {
+                console.error(`[GmailProcessor] Unexpected error during Supabase duplicate check for ${extractedUrl}:`, supaCheckError.message);
+                // Proceed with caution or return
+            }
+        } else {
+            console.warn('[GmailProcessor] Supabase client not initialized. Skipping database duplicate check. This might lead to reprocessing existing URLs.');
+        }
+        // --- End Supabase Duplicate Check ---
 
         try {
-            console.log(`Sending POST request to ${GENERATION_ENDPOINT} with URL: ${extractedUrl}`);
+            console.log(`[GmailProcessor] Sending POST request to ${GENERATION_ENDPOINT} with URL: ${extractedUrl}`);
             const response = await axios.post(GENERATION_ENDPOINT, { url: extractedUrl });
             console.log('Successfully sent data to generation endpoint:', response.status, response.data);
         } catch (apiError) {
@@ -235,27 +250,27 @@ async function processEmail(emailData, processedEmails) {
             }
         }
 
-        await saveProcessedEmail(messageId, processedEmails); // Save after successful processing and API call attempt
-
     } catch (parseError) {
-        console.error('Error parsing email:', parseError);
+        console.error('[GmailProcessor] Error parsing email:', parseError);
     }
 }
 
 async function main() {
-    console.log('Starting email processing script...');
+    console.log('[GmailProcessor] Starting email processing script...');
     let imap;
     try {
-        const processedEmails = await loadProcessedEmails();
+        // const processedEmails = await loadProcessedEmails(); // Removed
         imap = await connectToGmail();
         const emailsData = await searchEmails(imap);
 
         if (emailsData.length > 0) {
+            console.log(`[GmailProcessor] Processing ${emailsData.length} fetched emails.`);
             for (const emailData of emailsData) {
-                await processEmail(emailData, processedEmails);
+                // Pass only emailData, no longer passing processedEmails
+                await processEmail(emailData /*, processedEmails - Removed */);
             }
         } else {
-            console.log('No new emails to process.');
+            console.log('[GmailProcessor] No new emails to process.');
         }
 
     } catch (error) {
