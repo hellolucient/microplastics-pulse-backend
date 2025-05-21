@@ -267,63 +267,79 @@ async function generateAndStoreImage(title, articleUrl) {
 async function fetchArticleDetails(articleUrl) {
     try {
         console.log(`Fetching article details for URL: ${articleUrl}`);
-        // Increased timeout specifically for fetching, as some sites (like X) can be slow or require more time for JS rendering (though we don't execute JS here)
-        const AXIOS_TIMEOUT = 30000; // 30 seconds
-
-        const { data: htmlContent } = await axios.get(articleUrl, { 
-            timeout: AXIOS_TIMEOUT, 
-            headers: { 
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-            }
-        });
-        const $ = cheerio.load(htmlContent);
-
-        let title = $('meta[property="og:title"]').attr('content') || $('title').first().text();
-        if (title) title = he.decode(title.trim());
-
-        let snippet;
-        const isLinkedInUrl = articleUrl.includes('linkedin.com');
+        const AXIOS_TIMEOUT = 30000;
         const isXUrl = articleUrl.includes('x.com') || articleUrl.includes('twitter.com');
 
-        if (isLinkedInUrl) {
-            snippet = $('meta[property="og:description"]').attr('content');
-            if (!snippet) {
-                 console.warn(`Could not extract og:description for LinkedIn URL: ${articleUrl}. Attempting generic paragraph.`);
-                 let pText = $('p').first().text(); 
-                 if (pText) snippet = he.decode(pText.trim()).substring(0,500);
+        let axiosConfig = {
+            timeout: AXIOS_TIMEOUT,
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
             }
-        } else if (isXUrl) {
-            title = $('meta[property="og:title"]').attr('content'); // Prioritize og:title for X
+        };
+
+        if (isXUrl) {
+            console.log(`[X.com Fetch] Attempting fetch with Googlebot User-Agent for ${articleUrl}`);
+            axiosConfig.headers['User-Agent'] = 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)';
+        }
+
+        const { data: htmlContent } = await axios.get(articleUrl, axiosConfig);
+        const $ = cheerio.load(htmlContent);
+
+        let title; // Declare title before specific assignments
+        let snippet; // Declare snippet before specific assignments
+
+        if (isXUrl) {
+            title = $('meta[property="og:title"]').attr('content');
             if (title) title = he.decode(title.trim());
-            else title = $('title').first().text() ? he.decode($('title').first().text().trim()) : null; // Fallback to page title
+            else title = $('title').first().text() ? he.decode($('title').first().text().trim()) : null;
+
+            snippet = $('meta[property="og:description"]').attr('content');
+            if (snippet) {
+                snippet = he.decode(snippet.trim());
+                console.log(`[X.com Fetch] Successfully extracted og:description for ${articleUrl}: ${snippet.substring(0, 100)}...`);
+            } else {
+                console.warn(`[X.com Handling] Could not extract og:description for X/Twitter URL: ${articleUrl} even with Googlebot UA. Setting snippet to null.`);
+                snippet = null;
+            }
+            
+            if (!title || title.toLowerCase().includes('x.com /') || title.toLowerCase() === 'x' || title.toLowerCase().startsWith('tweet / x')) {
+                const ogTitleVal = $('meta[property="og:title"]').attr('content');
+                if (ogTitleVal && (ogTitleVal.includes(' on X: ') || ogTitleVal.includes(' on Twitter: '))) {
+                    title = he.decode(ogTitleVal.trim());
+                } else {
+                    // Try to get username from URL as a fallback for title
+                    try {
+                        const pathParts = new URL(articleUrl).pathname.split('/');
+                        const username = pathParts[1];
+                        if (username && username !== 'i' && username !== 'home' && !username.includes('.')) { // Avoid things like index.html or i/flow
+                           title = `Post on X by ${username}`;
+                        } else {
+                            title = 'Post on X'; // Generic fallback if username extraction fails
+                        }
+                    } catch (e) {
+                        title = 'Post on X'; // Generic fallback if URL parsing fails
+                    }
+                }
+            }
+        } else if (articleUrl.includes('linkedin.com')) { // LinkedIn specific handling
+            title = $('meta[property="og:title"]').attr('content') || $('title').first().text();
+            if (title) title = he.decode(title.trim());
 
             snippet = $('meta[property="og:description"]').attr('content');
             if (snippet) {
                 snippet = he.decode(snippet.trim());
             } else {
-                 console.warn(`[X.com Handling] Could not extract og:description for X/Twitter URL: ${articleUrl}. Setting snippet to null.`);
-                 snippet = null; // Explicitly set to null if og:description fails for X
+                 console.warn(`Could not extract og:description for LinkedIn URL: ${articleUrl}. Attempting generic paragraph.`);
+                 let pText = $('p').first().text(); 
+                 if (pText) snippet = he.decode(pText.trim()).substring(0,500);
             }
-            
-            // If title is still generic for X.com, try to make it slightly better or use a placeholder
-            if (!title || title.toLowerCase().includes('x.com /') || title.toLowerCase() === 'x') {
-                 // Attempt to get username from og:title if it exists in a pattern like "Username on X: ..."
-                const ogTitleVal = $('meta[property="og:title"]').attr('content');
-                if (ogTitleVal && ogTitleVal.includes(' on X: ')) {
-                    title = he.decode(ogTitleVal.trim());
-                } else {
-                    title = `Post on X by ${new URL(articleUrl).pathname.split('/')[1] || 'user'}`;
-                }
-            }
+        } else { // Generic handling for other URLs
+            title = $('meta[property="og:title"]').attr('content') || $('title').first().text();
+            if (title) title = he.decode(title.trim());
 
-        } else {
             snippet = $('meta[name="description"]').attr('content') || $('meta[property="og:description"]').attr('content');
-            if (snippet) snippet = he.decode(snippet.trim()); // Moved decoding here from below
+            if (snippet) snippet = he.decode(snippet.trim());
         }
-        
-        // General decoding if snippet was populated by a path that missed it (e.g. non-LinkedIn/X meta tags)
-        // if (snippet && !isLinkedInUrl && !isXUrl) snippet = he.decode(snippet.trim()); 
-        // This line is a bit redundant if all paths to populate snippet now include he.decode(), so commenting out.
 
         if (!title) {
             console.warn(`Could not extract title for ${articleUrl}`);
