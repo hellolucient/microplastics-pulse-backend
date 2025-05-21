@@ -267,8 +267,11 @@ async function generateAndStoreImage(title, articleUrl) {
 async function fetchArticleDetails(articleUrl) {
     try {
         console.log(`Fetching article details for URL: ${articleUrl}`);
+        // Increased timeout specifically for fetching, as some sites (like X) can be slow or require more time for JS rendering (though we don't execute JS here)
+        const AXIOS_TIMEOUT = 30000; // 30 seconds
+
         const { data: htmlContent } = await axios.get(articleUrl, { 
-            timeout: 20000, 
+            timeout: AXIOS_TIMEOUT, 
             headers: { 
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
             }
@@ -280,43 +283,59 @@ async function fetchArticleDetails(articleUrl) {
 
         let snippet;
         const isLinkedInUrl = articleUrl.includes('linkedin.com');
-        const isXUrl = articleUrl.includes('x.com') || articleUrl.includes('twitter.com'); // Added twitter.com for broader match
+        const isXUrl = articleUrl.includes('x.com') || articleUrl.includes('twitter.com');
 
         if (isLinkedInUrl) {
             snippet = $('meta[property="og:description"]').attr('content');
             if (!snippet) {
                  console.warn(`Could not extract og:description for LinkedIn URL: ${articleUrl}. Attempting generic paragraph.`);
                  let pText = $('p').first().text(); 
-                 if (pText) snippet = he.decode(pText.trim()).substring(0,500); // Apply decode and substring here
+                 if (pText) snippet = he.decode(pText.trim()).substring(0,500);
             }
         } else if (isXUrl) {
+            title = $('meta[property="og:title"]').attr('content'); // Prioritize og:title for X
+            if (title) title = he.decode(title.trim());
+            else title = $('title').first().text() ? he.decode($('title').first().text().trim()) : null; // Fallback to page title
+
             snippet = $('meta[property="og:description"]').attr('content');
-            if (!snippet) {
-                 console.warn(`Could not extract og:description for X/Twitter URL: ${articleUrl}. Attempting generic paragraph.`);
-                 let pText = $('p').first().text();
-                 if (pText) snippet = he.decode(pText.trim()).substring(0,500); // Apply decode and substring here
+            if (snippet) {
+                snippet = he.decode(snippet.trim());
+            } else {
+                 console.warn(`[X.com Handling] Could not extract og:description for X/Twitter URL: ${articleUrl}. Setting snippet to null.`);
+                 snippet = null; // Explicitly set to null if og:description fails for X
             }
-            // For X/Twitter, the title often includes "on X:" or similar, which might be redundant if snippet is the tweet itself.
-            // We can refine the title if needed, e.g., by removing such prefixes if the snippet is good.
-            // For now, let's keep it simple and use the extracted og:title or title tag.
+            
+            // If title is still generic for X.com, try to make it slightly better or use a placeholder
+            if (!title || title.toLowerCase().includes('x.com /') || title.toLowerCase() === 'x') {
+                 // Attempt to get username from og:title if it exists in a pattern like "Username on X: ..."
+                const ogTitleVal = $('meta[property="og:title"]').attr('content');
+                if (ogTitleVal && ogTitleVal.includes(' on X: ')) {
+                    title = he.decode(ogTitleVal.trim());
+                } else {
+                    title = `Post on X by ${new URL(articleUrl).pathname.split('/')[1] || 'user'}`;
+                }
+            }
+
         } else {
-            // Original logic for other URLs
             snippet = $('meta[name="description"]').attr('content') || $('meta[property="og:description"]').attr('content');
+            if (snippet) snippet = he.decode(snippet.trim()); // Moved decoding here from below
         }
         
-        if (snippet) snippet = he.decode(snippet.trim()); // Ensure decoding happens if not already
+        // General decoding if snippet was populated by a path that missed it (e.g. non-LinkedIn/X meta tags)
+        // if (snippet && !isLinkedInUrl && !isXUrl) snippet = he.decode(snippet.trim()); 
+        // This line is a bit redundant if all paths to populate snippet now include he.decode(), so commenting out.
 
         if (!title) {
             console.warn(`Could not extract title for ${articleUrl}`);
             try {
                 title = `Article from ${new URL(articleUrl).hostname}`;
             } catch (e) {
-                title = `Article from URL`; // Fallback if URL is also malformed
+                title = `Article from URL`;
             }
         }
 
-        if (!snippet) {
-            console.warn(`Could not extract meta description for ${articleUrl}. Using first paragraph as fallback.`);
+        if (!snippet && !isXUrl) { // For X.com, we've already handled the null snippet case
+            console.warn(`Could not extract meta description for ${articleUrl} (and not an X.com URL with intentional null snippet). Using first paragraph as fallback.`);
             let pText = $('p').first().text();
             if (pText) snippet = he.decode(pText.trim()).substring(0, 500);
             
@@ -326,12 +345,19 @@ async function fetchArticleDetails(articleUrl) {
             }
         }
         
-        // Ensure snippet is not overly long if it was grabbed from a large p tag
-        if (snippet.length > 600) { // Max desired snippet length
+        if (snippet && snippet.length > 600) { 
             snippet = snippet.substring(0, 597) + "...";
         }
 
-        console.log(`Extracted Title: ${title}, Snippet: ${snippet?.substring(0,100)}... (Length: ${snippet?.length})`);
+        // If snippet is explicitly null (e.g. for X.com failure), ensure it stays null not empty string
+        if (snippet === null) {
+             console.log(`[fetchArticleDetails] Snippet is intentionally null for ${articleUrl}`);
+        } else if (!snippet) {
+            snippet = ''; // Default to empty string if not null but still falsy (e.g. undefined)
+        }
+
+
+        console.log(`Extracted Title: ${title}, Snippet: ${snippet === null ? '[NULL]' : snippet.substring(0,100)+'...'} (Length: ${snippet === null ? 0 : snippet.length})`);
         return { title, snippet };
     } catch (error) {
         console.error(`Error fetching article details for ${articleUrl}:`, error.message);
