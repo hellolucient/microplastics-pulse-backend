@@ -265,63 +265,44 @@ async function generateAndStoreImage(title, articleUrl) {
 
 // Helper function to fetch and parse article details (title, snippet)
 async function fetchArticleDetails(articleUrl) {
+    const isXUrl = articleUrl.includes('x.com') || articleUrl.includes('twitter.com');
+
+    if (isXUrl) {
+        console.log(`[X.com Handling] Bypassing direct fetch for X/Twitter URL: ${articleUrl}. Returning generic info.`);
+        let title = 'Post on X';
+        try {
+            const pathParts = new URL(articleUrl).pathname.split('/');
+            const username = pathParts[1];
+            if (username && username.toLowerCase() !== 'i' && username.toLowerCase() !== 'home' && !username.includes('.')) {
+                title = `Post on X by ${username}`;
+            }
+        } catch (e) {
+            console.warn(`[X.com Handling] Could not parse username from URL ${articleUrl} for title.`);
+        }
+        return { title: he.decode(title), snippet: null }; // Ensure title is decoded, snippet is null
+    }
+
+    // Proceed with fetching for non-X.com URLs
     try {
         console.log(`Fetching article details for URL: ${articleUrl}`);
         const AXIOS_TIMEOUT = 30000;
-        const isXUrl = articleUrl.includes('x.com') || articleUrl.includes('twitter.com');
-
+        
         let axiosConfig = {
             timeout: AXIOS_TIMEOUT,
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
             }
         };
-
-        if (isXUrl) {
-            console.log(`[X.com Fetch] Attempting fetch with Googlebot User-Agent for ${articleUrl}`);
-            axiosConfig.headers['User-Agent'] = 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)';
-        }
+        // Removed Googlebot UA logic as it caused 403 for X and is not needed if we bypass fetch for X
 
         const { data: htmlContent } = await axios.get(articleUrl, axiosConfig);
         const $ = cheerio.load(htmlContent);
 
-        let title; // Declare title before specific assignments
-        let snippet; // Declare snippet before specific assignments
+        let title; 
+        let snippet;
 
-        if (isXUrl) {
-            title = $('meta[property="og:title"]').attr('content');
-            if (title) title = he.decode(title.trim());
-            else title = $('title').first().text() ? he.decode($('title').first().text().trim()) : null;
-
-            snippet = $('meta[property="og:description"]').attr('content');
-            if (snippet) {
-                snippet = he.decode(snippet.trim());
-                console.log(`[X.com Fetch] Successfully extracted og:description for ${articleUrl}: ${snippet.substring(0, 100)}...`);
-            } else {
-                console.warn(`[X.com Handling] Could not extract og:description for X/Twitter URL: ${articleUrl} even with Googlebot UA. Setting snippet to null.`);
-                snippet = null;
-            }
-            
-            if (!title || title.toLowerCase().includes('x.com /') || title.toLowerCase() === 'x' || title.toLowerCase().startsWith('tweet / x')) {
-                const ogTitleVal = $('meta[property="og:title"]').attr('content');
-                if (ogTitleVal && (ogTitleVal.includes(' on X: ') || ogTitleVal.includes(' on Twitter: '))) {
-                    title = he.decode(ogTitleVal.trim());
-                } else {
-                    // Try to get username from URL as a fallback for title
-                    try {
-                        const pathParts = new URL(articleUrl).pathname.split('/');
-                        const username = pathParts[1];
-                        if (username && username !== 'i' && username !== 'home' && !username.includes('.')) { // Avoid things like index.html or i/flow
-                           title = `Post on X by ${username}`;
-                        } else {
-                            title = 'Post on X'; // Generic fallback if username extraction fails
-                        }
-                    } catch (e) {
-                        title = 'Post on X'; // Generic fallback if URL parsing fails
-                    }
-                }
-            }
-        } else if (articleUrl.includes('linkedin.com')) { // LinkedIn specific handling
+        // Specific handling for LinkedIn (example, can be expanded)
+        if (articleUrl.includes('linkedin.com')) { 
             title = $('meta[property="og:title"]').attr('content') || $('title').first().text();
             if (title) title = he.decode(title.trim());
 
@@ -333,7 +314,7 @@ async function fetchArticleDetails(articleUrl) {
                  let pText = $('p').first().text(); 
                  if (pText) snippet = he.decode(pText.trim()).substring(0,500);
             }
-        } else { // Generic handling for other URLs
+        } else { // Generic handling for other (non-X, non-LinkedIn initially) URLs
             title = $('meta[property="og:title"]').attr('content') || $('title').first().text();
             if (title) title = he.decode(title.trim());
 
@@ -341,6 +322,7 @@ async function fetchArticleDetails(articleUrl) {
             if (snippet) snippet = he.decode(snippet.trim());
         }
 
+        // Fallbacks if title/snippet are still missing (for non-X URLs)
         if (!title) {
             console.warn(`Could not extract title for ${articleUrl}`);
             try {
@@ -350,8 +332,8 @@ async function fetchArticleDetails(articleUrl) {
             }
         }
 
-        if (!snippet && !isXUrl) { // For X.com, we've already handled the null snippet case
-            console.warn(`Could not extract meta description for ${articleUrl} (and not an X.com URL with intentional null snippet). Using first paragraph as fallback.`);
+        if (!snippet) { 
+            console.warn(`Could not extract meta description for ${articleUrl}. Using first paragraph as fallback.`);
             let pText = $('p').first().text();
             if (pText) snippet = he.decode(pText.trim()).substring(0, 500);
             
@@ -365,26 +347,23 @@ async function fetchArticleDetails(articleUrl) {
             snippet = snippet.substring(0, 597) + "...";
         }
 
-        // If snippet is explicitly null (e.g. for X.com failure), ensure it stays null not empty string
         if (snippet === null) {
              console.log(`[fetchArticleDetails] Snippet is intentionally null for ${articleUrl}`);
         } else if (!snippet) {
-            snippet = ''; // Default to empty string if not null but still falsy (e.g. undefined)
+            snippet = '';
         }
-
 
         console.log(`Extracted Title: ${title}, Snippet: ${snippet === null ? '[NULL]' : snippet.substring(0,100)+'...'} (Length: ${snippet === null ? 0 : snippet.length})`);
         return { title, snippet };
+
     } catch (error) {
         console.error(`Error fetching article details for ${articleUrl}:`, error.message);
-        if (error.code === 'ECONNABORTED') {
-            console.error(`Timeout fetching details for ${articleUrl}`);
-        }
         let hostname = 'unknown source';
         try {
             hostname = new URL(articleUrl).hostname;
-        } catch (e) { /* ignore error if URL is malformed */ }
-        return { title: `Article from ${hostname}`, snippet: 'Could not fetch content. The source may be dynamic or protected.' }; 
+        } catch (e) { /* ignore */ }
+        // Return a specific error message that can be checked by the caller if needed
+        return { title: `Article from ${hostname}`, snippet: 'Could not fetch content. The source may be dynamic or protected.'}; 
     }
 }
 
@@ -1131,7 +1110,7 @@ app.post('/api/submit-article-url', async (req, res) => {
         let summary = null; // Initialize summary
         const isXUrl = articleUrl.includes('x.com') || articleUrl.includes('twitter.com');
 
-        if (isXUrl && snippet) {
+        if (isXUrl && snippet && snippet !== 'Could not fetch content. The source may be dynamic or protected.') {
             console.log(`[POST /api/submit-article-url] X.com URL detected with snippet. Using snippet directly as summary.`);
             summary = snippet; // Use the fetched snippet (tweet text) as the summary
         } else if (openai && title && snippet) { 
