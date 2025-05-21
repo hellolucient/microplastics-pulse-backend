@@ -1074,10 +1074,9 @@ app.post('/api/submit-article-url', async (req, res) => {
         return res.status(400).json({ message: 'Missing article URL in request body.' });
     }
 
-    let sourceHostname = 'unknown'; // Default source
+    let sourceHostname = 'unknown';
     try {
         sourceHostname = new URL(articleUrl).hostname;
-        // Remove 'www.' prefix if it exists for cleaner source display
         if (sourceHostname.startsWith('www.')) {
             sourceHostname = sourceHostname.substring(4);
         }
@@ -1089,17 +1088,11 @@ app.post('/api/submit-article-url', async (req, res) => {
         console.error('[POST /api/submit-article-url] Supabase client not initialized.');
         return res.status(500).json({ message: 'Database service not available.' });
     }
-    if (!openai) {
-        console.error('[POST /api/submit-article-url] OpenAI client not initialized.');
-        // We might still proceed if only image/summary fails, or return error immediately
-        // return res.status(500).json({ message: 'AI service not available.' }); 
-    }
 
     try {
-        // 1. Check for duplicates in Supabase
         console.log(`[POST /api/submit-article-url] Checking for duplicate URL: ${articleUrl}`);
         const { data: existingArticle, error: selectError } = await supabase
-            .from('latest_news') // Assuming your table is named 'latest_news'
+            .from('latest_news')
             .select('url')
             .eq('url', articleUrl)
             .maybeSingle();
@@ -1116,49 +1109,45 @@ app.post('/api/submit-article-url', async (req, res) => {
 
         console.log(`[POST /api/submit-article-url] URL ${articleUrl} is new. Proceeding with processing.`);
 
-        // 2. Fetch Article Content (Title/Snippet)
         const { title, snippet } = await fetchArticleDetails(articleUrl);
-        if (!title && !snippet) { // If both are null/empty after fetch attempt
-            console.warn(`[POST /api/submit-article-url] Could not retrieve title or snippet for ${articleUrl}. Processing with URL only.`);
-            // Decide if you want to proceed without title/snippet or return an error
-        }
+        // Title and snippet can be null if fetchArticleDetails fails gracefully for certain sites (e.g. X.com)
 
-        // 3. Generate AI Summary
-        let summary = null;
-        if (openai && title && snippet) { // Only attempt if OpenAI is available and we have title/snippet
-            console.log(`[POST /api/submit-article-url] Generating summary for: ${title}`);
-            summary = await summarizeText(title, snippet); // summarizeText should handle its own errors and return null if failed
+        let summary = null; // Initialize summary
+        const isXUrl = articleUrl.includes('x.com') || articleUrl.includes('twitter.com');
+
+        if (isXUrl && snippet) {
+            console.log(`[POST /api/submit-article-url] X.com URL detected with snippet. Using snippet directly as summary.`);
+            summary = snippet; // Use the fetched snippet (tweet text) as the summary
+        } else if (openai && title && snippet) { 
+            console.log(`[POST /api/submit-article-url] Generating AI summary for: ${title}`);
+            summary = await summarizeText(title, snippet);
         } else {
-            console.warn('[POST /api/submit-article-url] Skipping summary generation (OpenAI not available or missing title/snippet).');
+            console.warn('[POST /api/submit-article-url] Skipping summary generation (OpenAI not available, or missing title/snippet, or X.com URL without snippet).');
+            // Summary remains null if it couldn't be generated or assigned from X.com snippet
         }
 
-        // 4. Generate AI Image
         let imageUrl = null;
-        if (openai && title) { // Only attempt if OpenAI is available and we have a title
+        if (openai && title) {
             console.log(`[POST /api/submit-article-url] Generating image for: ${title}`);
-            imageUrl = await generateAndStoreImage(title, articleUrl); // generateAndStoreImage should handle its own errors and return null if failed
+            imageUrl = await generateAndStoreImage(title, articleUrl);
         } else {
             console.warn('[POST /api/submit-article-url] Skipping image generation (OpenAI not available or missing title).');
         }
 
-        // 5. Save to Supabase
         console.log(`[POST /api/submit-article-url] Saving article to Supabase. URL: ${articleUrl}, Source: ${sourceHostname}`);
         const { data: newArticle, error: insertError } = await supabase
             .from('latest_news')
             .insert([
                 {
                     url: articleUrl,
-                    title: title || 'Title not available', // Ensure title is not null
-                    ai_summary: summary,
+                    title: title || 'Title not available',
+                    ai_summary: summary, // This will be the X.com snippet or AI summary
                     ai_image_url: imageUrl,
-                    // Add other relevant fields like:
-                    // published_at: new Date().toISOString(), // Or a date from the article if available
-                    source: sourceHostname, // Use the parsed hostname
-                    processed_at: new Date().toISOString() // Added processed_at for consistency
-                    // category: await categorizeText(title, snippet) // Optional: if you want to categorize too
+                    source: sourceHostname,
+                    processed_at: new Date().toISOString()
                 },
             ])
-            .select(); // Return the inserted record(s)
+            .select();
 
         if (insertError) {
             console.error('[POST /api/submit-article-url] Error saving article to Supabase:', insertError);
