@@ -268,38 +268,43 @@ async function fetchArticleDetails(articleUrl) {
     try {
         console.log(`Fetching article details for URL: ${articleUrl}`);
         const { data: htmlContent } = await axios.get(articleUrl, { 
-            timeout: 20000, // Increased timeout to 20s
-            headers: { // Add a common user-agent to look more like a browser
+            timeout: 20000, 
+            headers: { 
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
             }
         });
         const $ = cheerio.load(htmlContent);
 
         let title = $('meta[property="og:title"]').attr('content') || $('title').first().text();
-        if (title) title = he.decode(title.trim()); // Decode HTML entities
+        if (title) title = he.decode(title.trim());
 
         let snippet;
         const isLinkedInUrl = articleUrl.includes('linkedin.com');
+        const isXUrl = articleUrl.includes('x.com') || articleUrl.includes('twitter.com'); // Added twitter.com for broader match
 
         if (isLinkedInUrl) {
-            // For LinkedIn, og:description is usually the best bet for the post content
             snippet = $('meta[property="og:description"]').attr('content');
             if (!snippet) {
-                // As a secondary fallback for LinkedIn, try to find a more specific element
-                // This is a guess and might need refinement based on actual LinkedIn post structure
-                // Example: Look for divs that might contain the main post text
-                // This is highly experimental and might not work reliably:
-                // snippet = $('div.feed-shared-update-v2__description-wrapper .text-view-model').text();
-                // For now, let's stick to a safer fallback if og:description is missing
                  console.warn(`Could not extract og:description for LinkedIn URL: ${articleUrl}. Attempting generic paragraph.`);
-                 snippet = $('p').first().text()?.trim().substring(0, 500); // Increased fallback length
+                 let pText = $('p').first().text(); 
+                 if (pText) snippet = he.decode(pText.trim()).substring(0,500); // Apply decode and substring here
             }
+        } else if (isXUrl) {
+            snippet = $('meta[property="og:description"]').attr('content');
+            if (!snippet) {
+                 console.warn(`Could not extract og:description for X/Twitter URL: ${articleUrl}. Attempting generic paragraph.`);
+                 let pText = $('p').first().text();
+                 if (pText) snippet = he.decode(pText.trim()).substring(0,500); // Apply decode and substring here
+            }
+            // For X/Twitter, the title often includes "on X:" or similar, which might be redundant if snippet is the tweet itself.
+            // We can refine the title if needed, e.g., by removing such prefixes if the snippet is good.
+            // For now, let's keep it simple and use the extracted og:title or title tag.
         } else {
-            // Original logic for non-LinkedIn URLs
+            // Original logic for other URLs
             snippet = $('meta[name="description"]').attr('content') || $('meta[property="og:description"]').attr('content');
         }
         
-        if (snippet) snippet = he.decode(snippet.trim()); // Decode HTML entities
+        if (snippet) snippet = he.decode(snippet.trim()); // Ensure decoding happens if not already
 
         if (!title) {
             console.warn(`Could not extract title for ${articleUrl}`);
@@ -312,7 +317,9 @@ async function fetchArticleDetails(articleUrl) {
 
         if (!snippet) {
             console.warn(`Could not extract meta description for ${articleUrl}. Using first paragraph as fallback.`);
-            snippet = $('p').first().text()?.trim().substring(0, 500); // Limit snippet length, increased
+            let pText = $('p').first().text();
+            if (pText) snippet = he.decode(pText.trim()).substring(0, 500);
+            
             if (!snippet) {
                  console.warn(`Could not extract first paragraph for ${articleUrl}. Snippet will be empty.`);
                  snippet = ''; 
