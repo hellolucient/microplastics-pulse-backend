@@ -266,38 +266,75 @@ async function generateAndStoreImage(title, articleUrl) {
 async function fetchArticleDetails(articleUrl) {
     try {
         console.log(`Fetching article details for URL: ${articleUrl}`);
-        const { data: htmlContent } = await axios.get(articleUrl, { timeout: 15000 }); // 15s timeout
+        const { data: htmlContent } = await axios.get(articleUrl, { 
+            timeout: 20000, // Increased timeout to 20s
+            headers: { // Add a common user-agent to look more like a browser
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            }
+        });
         const $ = cheerio.load(htmlContent);
 
-        let title = $('title').first().text()?.trim();
-        let snippet = $('meta[name="description"]').attr('content') || $('meta[property="og:description"]').attr('content');
+        let title = $('meta[property="og:title"]').attr('content') || $('title').first().text();
+        title = title?.trim();
+
+        let snippet;
+        const isLinkedInUrl = articleUrl.includes('linkedin.com');
+
+        if (isLinkedInUrl) {
+            // For LinkedIn, og:description is usually the best bet for the post content
+            snippet = $('meta[property="og:description"]').attr('content');
+            if (!snippet) {
+                // As a secondary fallback for LinkedIn, try to find a more specific element
+                // This is a guess and might need refinement based on actual LinkedIn post structure
+                // Example: Look for divs that might contain the main post text
+                // This is highly experimental and might not work reliably:
+                // snippet = $('div.feed-shared-update-v2__description-wrapper .text-view-model').text();
+                // For now, let's stick to a safer fallback if og:description is missing
+                 console.warn(`Could not extract og:description for LinkedIn URL: ${articleUrl}. Attempting generic paragraph.`);
+                 snippet = $('p').first().text()?.trim().substring(0, 500); // Increased fallback length
+            }
+        } else {
+            // Original logic for non-LinkedIn URLs
+            snippet = $('meta[name="description"]').attr('content') || $('meta[property="og:description"]').attr('content');
+        }
+        
         snippet = snippet?.trim();
 
         if (!title) {
             console.warn(`Could not extract title for ${articleUrl}`);
-            // Fallback: Use a generic title or part of the URL if no title found
-            title = `Article from ${new URL(articleUrl).hostname}`;
+            try {
+                title = `Article from ${new URL(articleUrl).hostname}`;
+            } catch (e) {
+                title = `Article from URL`; // Fallback if URL is also malformed
+            }
         }
+
         if (!snippet) {
             console.warn(`Could not extract meta description for ${articleUrl}. Using first paragraph as fallback.`);
-            // Fallback: try to get the first paragraph as a snippet
-            snippet = $('p').first().text()?.trim().substring(0, 300); // Limit snippet length
+            snippet = $('p').first().text()?.trim().substring(0, 500); // Limit snippet length, increased
             if (!snippet) {
                  console.warn(`Could not extract first paragraph for ${articleUrl}. Snippet will be empty.`);
-                 snippet = ''; // Default to empty if no p tag found
+                 snippet = ''; 
             }
         }
         
-        console.log(`Extracted Title: ${title}, Snippet: ${snippet?.substring(0,100)}...`);
+        // Ensure snippet is not overly long if it was grabbed from a large p tag
+        if (snippet.length > 600) { // Max desired snippet length
+            snippet = snippet.substring(0, 597) + "...";
+        }
+
+        console.log(`Extracted Title: ${title}, Snippet: ${snippet?.substring(0,100)}... (Length: ${snippet?.length})`);
         return { title, snippet };
     } catch (error) {
         console.error(`Error fetching article details for ${articleUrl}:`, error.message);
         if (error.code === 'ECONNABORTED') {
             console.error(`Timeout fetching details for ${articleUrl}`);
         }
-        // In case of error, return null or default values so the process can decide how to proceed
-        // Potentially, we could still try to process with just the URL if title/snippet extraction fails
-        return { title: `Article from ${new URL(articleUrl).hostname}`, snippet: 'Could not fetch details.' }; 
+        let hostname = 'unknown source';
+        try {
+            hostname = new URL(articleUrl).hostname;
+        } catch (e) { /* ignore error if URL is malformed */ }
+        return { title: `Article from ${hostname}`, snippet: 'Could not fetch content. The source may be dynamic or protected.' }; 
     }
 }
 
@@ -1003,6 +1040,17 @@ app.post('/api/submit-article-url', async (req, res) => {
         return res.status(400).json({ message: 'Missing article URL in request body.' });
     }
 
+    let sourceHostname = 'unknown'; // Default source
+    try {
+        sourceHostname = new URL(articleUrl).hostname;
+        // Remove 'www.' prefix if it exists for cleaner source display
+        if (sourceHostname.startsWith('www.')) {
+            sourceHostname = sourceHostname.substring(4);
+        }
+    } catch (e) {
+        console.warn(`[POST /api/submit-article-url] Could not parse hostname from URL: ${articleUrl}. Using default '${sourceHostname}'.`);
+    }
+
     if (!supabase) {
         console.error('[POST /api/submit-article-url] Supabase client not initialized.');
         return res.status(500).json({ message: 'Database service not available.' });
@@ -1020,7 +1068,7 @@ app.post('/api/submit-article-url', async (req, res) => {
             .from('latest_news') // Assuming your table is named 'latest_news'
             .select('url')
             .eq('url', articleUrl)
-            .maybeSingle(); // Returns one record or null, not an array
+            .maybeSingle();
 
         if (selectError) {
             console.error('[POST /api/submit-article-url] Error checking for duplicate URL:', selectError);
@@ -1060,7 +1108,7 @@ app.post('/api/submit-article-url', async (req, res) => {
         }
 
         // 5. Save to Supabase
-        console.log(`[POST /api/submit-article-url] Saving article to Supabase. URL: ${articleUrl}`);
+        console.log(`[POST /api/submit-article-url] Saving article to Supabase. URL: ${articleUrl}, Source: ${sourceHostname}`);
         const { data: newArticle, error: insertError } = await supabase
             .from('latest_news')
             .insert([
@@ -1071,7 +1119,7 @@ app.post('/api/submit-article-url', async (req, res) => {
                     ai_image_url: imageUrl,
                     // Add other relevant fields like:
                     // published_at: new Date().toISOString(), // Or a date from the article if available
-                    source: 'email_submission',
+                    source: sourceHostname, // Use the parsed hostname
                     processed_at: new Date().toISOString() // Added processed_at for consistency
                     // category: await categorizeText(title, snippet) // Optional: if you want to categorize too
                 },
