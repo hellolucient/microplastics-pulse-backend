@@ -6,6 +6,7 @@ const { OpenAI } = require('openai');
 const axios = require('axios');
 const { put } = require('@vercel/blob'); // Added Vercel Blob import
 const cheerio = require('cheerio'); // Added Cheerio
+const he = require('he'); // Added he library
 // const cron = require('node-cron'); // Removed for Vercel Serverless
 
 const app = express();
@@ -275,7 +276,7 @@ async function fetchArticleDetails(articleUrl) {
         const $ = cheerio.load(htmlContent);
 
         let title = $('meta[property="og:title"]').attr('content') || $('title').first().text();
-        title = title?.trim();
+        if (title) title = he.decode(title.trim()); // Decode HTML entities
 
         let snippet;
         const isLinkedInUrl = articleUrl.includes('linkedin.com');
@@ -298,7 +299,7 @@ async function fetchArticleDetails(articleUrl) {
             snippet = $('meta[name="description"]').attr('content') || $('meta[property="og:description"]').attr('content');
         }
         
-        snippet = snippet?.trim();
+        if (snippet) snippet = he.decode(snippet.trim()); // Decode HTML entities
 
         if (!title) {
             console.warn(`Could not extract title for ${articleUrl}`);
