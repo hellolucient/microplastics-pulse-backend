@@ -22,6 +22,63 @@ if (supabaseUrl && supabaseServiceKey) {
 }
 // --- End Supabase Client Initialization ---
 
+// --- Supabase Helper Functions for Timestamp ---
+const SCRIPT_METADATA_TABLE = 'script_metadata';
+const LAST_CHECK_TIMESTAMP_KEY = 'last_email_check_timestamp';
+
+async function getLastCheckTimestamp() {
+    if (!supabase) {
+        console.warn('[GmailProcessor] Supabase client not initialized. Cannot get last check timestamp.');
+        return null;
+    }
+    try {
+        const { data, error } = await supabase
+            .from(SCRIPT_METADATA_TABLE)
+            .select('value')
+            .eq('key', LAST_CHECK_TIMESTAMP_KEY)
+            .maybeSingle();
+
+        if (error) {
+            console.error('[GmailProcessor] Error fetching last check timestamp from Supabase:', error.message);
+            return null;
+        }
+        if (data && data.value) {
+            console.log(`[GmailProcessor] Retrieved last check timestamp: ${data.value}`);
+            return new Date(data.value);
+        }
+        console.log('[GmailProcessor] No last check timestamp found in Supabase.');
+        return null;
+    } catch (e) {
+        console.error('[GmailProcessor] Exception fetching last check timestamp:', e.message);
+        return null;
+    }
+}
+
+async function updateLastCheckTimestamp(timestamp) {
+    if (!supabase) {
+        console.warn('[GmailProcessor] Supabase client not initialized. Cannot update last check timestamp.');
+        return;
+    }
+    try {
+        // Add 1 second to the timestamp to ensure we don't re-fetch the exact same last email
+        const nextTimestamp = new Date(timestamp.getTime() + 1000);
+        const isoString = nextTimestamp.toISOString();
+
+        const { error } = await supabase
+            .from(SCRIPT_METADATA_TABLE)
+            .upsert({ key: LAST_CHECK_TIMESTAMP_KEY, value: isoString }, { onConflict: 'key' });
+
+        if (error) {
+            console.error('[GmailProcessor] Error updating last check timestamp in Supabase:', error.message);
+        } else {
+            console.log(`[GmailProcessor] Successfully updated last check timestamp to: ${isoString}`);
+        }
+    } catch (e) {
+        console.error('[GmailProcessor] Exception updating last check timestamp:', e.message);
+    }
+}
+// --- End Supabase Helper Functions ---
+
 const imapConfig = {
     user: process.env.EMAIL_USER,
     password: process.env.EMAIL_PASS,
@@ -55,9 +112,9 @@ function connectToGmail() {
     });
 }
 
-function searchEmails(imap) {
-    return new Promise((resolve, reject) => {
-        imap.openBox('INBOX', true, (err, box) => {
+async function searchEmails(imap) {
+    return new Promise(async (resolve, reject) => {
+        imap.openBox('INBOX', true, async (err, box) => {
             if (err) {
                 console.error('Error opening INBOX:', err);
                 reject(err);
@@ -65,62 +122,85 @@ function searchEmails(imap) {
             }
             console.log('INBOX opened.');
 
-            const sinceDate = new Date();
-            sinceDate.setMinutes(sinceDate.getMinutes() - 15); // Emails from the last 15 minutes
-            // Gmail uses dates in YYYY-MM-DD format for SINCE.
-            // The IMAP library's search criteria might handle Date objects directly,
-            // but for Gmail, it's often more reliable to use a list like ['SINCE', '15-Feb-2024']
-            // Let's use the Date object directly first, if it fails, we may need to format.
-            // The imap library specifies using a Date object for SINCE.
+            let sinceDate = await getLastCheckTimestamp();
+            let newestEmailDateThisBatch = null;
 
-            console.log(`Searching for emails since: ${sinceDate.toDateString()}`);
+            if (!sinceDate) {
+                console.log('[GmailProcessor] Defaulting to search emails from the last 24 hours.');
+                sinceDate = new Date();
+                sinceDate.setDate(sinceDate.getDate() - 1); // Default to 24 hours ago
+            } else {
+                console.log(`[GmailProcessor] Using stored timestamp. Searching for emails since: ${sinceDate.toISOString()}`);
+            }
+            
+            // Ensure sinceDate is a Date object for the library
+            if (!(sinceDate instanceof Date)) {
+                console.warn("[GmailProcessor] sinceDate was not a Date object, attempting to parse. This shouldn't happen.");
+                try {
+                    sinceDate = new Date(sinceDate);
+                    if (isNaN(sinceDate.getTime())) throw new Error("Invalid date after parsing");
+                } catch (dateParseError) {
+                    console.error("[GmailProcessor] Failed to parse sinceDate, defaulting to 24 hours ago.", dateParseError);
+                    sinceDate = new Date();
+                    sinceDate.setDate(sinceDate.getDate() - 1);
+                }
+            }
+
+            // The imap library expects a Date object for SINCE.
+            // No need to format to YYYY-MM-DD string if passing a Date object.
+            console.log(`Searching for emails SINCE criteria: ${sinceDate.toISOString()} (UTC) / ${sinceDate.toString()} (Local)`);
 
             imap.search([['SINCE', sinceDate]], (searchErr, results) => {
                 if (searchErr) {
                     console.error('Email search error:', searchErr);
-                    reject(searchErr);
+                    reject({ emailsData: [], newestEmailDate: null, error: searchErr });
                     return;
                 }
                 console.log(`Found ${results.length} email(s).`);
                 if (results.length === 0) {
-                    resolve([]);
+                    resolve({ emailsData: [], newestEmailDate: null });
                     return;
                 }
 
-                const f = imap.fetch(results, { bodies: '' }); // Fetch entire messages
+                const f = imap.fetch(results, { bodies: '', markSeen: false }); // Fetch entire messages, explicitly don't mark as seen
                 const emailsData = [];
+                let currentBatchLatestDate = null;
 
                 f.on('message', (msg, seqno) => {
                     console.log(`Fetching message #${seqno}`);
                     let buffer = '';
-                    let headers = null;
+                    // let headers = null; // Not used directly here, parsed later
 
                     msg.on('body', (stream, info) => {
                         stream.on('data', (chunk) => {
                             buffer += chunk.toString('utf8');
                         });
-                        stream.once('end', () => {
-                            // Headers are usually available before the 'body' event via attributes
-                            // but we'll also get them from simpleParser
-                        });
+                        // stream.once('end', () => {}); // Not strictly needed here
                     });
                     msg.once('attributes', (attrs) => {
-                        // Store attributes if needed, like UID
-                        // attrs.uid
+                        // attrs.date is the internal date of the email
+                        if (attrs.date) {
+                            const emailDate = new Date(attrs.date);
+                            if (!currentBatchLatestDate || emailDate > currentBatchLatestDate) {
+                                currentBatchLatestDate = emailDate;
+                            }
+                        }
                     });
                     msg.once('end', () => {
-                        emailsData.push({ buffer, headers }); // Headers will be parsed by simpleParser
+                        emailsData.push({ buffer }); // Headers will be parsed by simpleParser
                     });
                 });
 
                 f.once('error', (fetchErr) => {
                     console.error('Fetch error:', fetchErr);
-                    reject(fetchErr);
+                    reject({ emailsData: [], newestEmailDate: null, error: fetchErr });
                 });
 
                 f.once('end', () => {
                     console.log('Finished fetching all messages.');
-                    resolve(emailsData);
+                    newestEmailDateThisBatch = currentBatchLatestDate;
+                    console.log(`Newest email date in this batch: ${newestEmailDateThisBatch ? newestEmailDateThisBatch.toISOString() : 'N/A'}`);
+                    resolve({ emailsData, newestEmailDate: newestEmailDateThisBatch });
                 });
             });
         });
@@ -258,26 +338,64 @@ async function processEmail(emailData /*, processedEmails - Removed */) {
 async function main() {
     console.log('[GmailProcessor] Starting email processing script...');
     let imap;
+    let newestEmailDateProcessed = null; // To keep track of the latest email date we actually processed
+    
     try {
-        // const processedEmails = await loadProcessedEmails(); // Removed
         imap = await connectToGmail();
-        const emailsData = await searchEmails(imap);
+        const searchResult = await searchEmails(imap); // searchEmails now returns an object
+        const emailsData = searchResult.emailsData;
+        const newestEmailFetchedThisBatch = searchResult.newestEmailDate; // This is the latest date from IMAP attributes
 
-        if (emailsData.length > 0) {
+        if (emailsData && emailsData.length > 0) {
             console.log(`[GmailProcessor] Processing ${emailsData.length} fetched emails.`);
             for (const emailData of emailsData) {
-                // Pass only emailData, no longer passing processedEmails
-                await processEmail(emailData /*, processedEmails - Removed */);
+                await processEmail(emailData);
+                // If processEmail were to return a status or the email's date upon successful processing,
+                // we could use that to update newestEmailDateProcessed.
+                // For now, we'll assume if emails were fetched, the newestEmailFetchedThisBatch is relevant.
+            }
+            // After successfully processing all emails in the batch,
+            // update the last check timestamp using the newest email date from THIS batch.
+            if (newestEmailFetchedThisBatch) {
+                newestEmailDateProcessed = newestEmailFetchedThisBatch; // Mark this as the point to continue from
             }
         } else {
             console.log('[GmailProcessor] No new emails to process.');
+            // If no emails were found, we could consider updating the timestamp to 'now'
+            // to avoid reprocessing the same "empty" range if the script runs quickly again.
+            // However, if getLastCheckTimestamp() defaults to 24h ago, this might not be necessary.
+            // For now, we only update if new emails were processed.
         }
 
     } catch (error) {
-        console.error('An error occurred in the main process:', error);
+        // Check if error is from searchEmails and contains specific structure
+        if (error && error.error && error.emailsData !== undefined && error.newestEmailDate !== undefined) {
+            console.error('An error occurred during email search:', error.error);
+        } else {
+            console.error('An error occurred in the main process:', error);
+        }
     } finally {
         if (imap) {
             imap.end();
+        }
+        // Update the timestamp only if we successfully processed some emails
+        if (newestEmailDateProcessed) {
+            await updateLastCheckTimestamp(newestEmailDateProcessed);
+        } else {
+            // If no emails were processed but the script ran, consider updating the timestamp to 'now'
+            // to prevent the next run from re-scanning a large old range if getLastCheckTimestamp returns null.
+            // This is a trade-off: if an email arrives between this 'now' and the actual last email time, it might be missed
+            // if the very next run uses this 'now'.
+            // A safer bet is to only update if emails were successfully fetched and processed.
+            // Or, if no emails found, update to the 'sinceDate' that was used for the search IF it was recent.
+            // For simplicity now: only update on successful processing of new emails.
+            // If getLastCheckTimestamp() defaults to 24h ago, and we find nothing, the next run will again check 24h from its 'now'.
+            // This is reasonable for a manual trigger.
+            const lastChecked = await getLastCheckTimestamp();
+            if (!lastChecked) { // If there was no prior record, and we found no emails
+                console.log("[GmailProcessor] No prior timestamp and no new emails. Setting 'last check' to now to avoid large future scans.");
+                await updateLastCheckTimestamp(new Date()); // Set to current time
+            }
         }
         console.log('Email processing script finished.');
     }
