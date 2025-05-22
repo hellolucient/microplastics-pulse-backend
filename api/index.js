@@ -1105,8 +1105,16 @@ app.post('/api/submit-article-url', async (req, res) => {
         console.log(`[POST /api/submit-article-url] URL ${articleUrl} is new. Proceeding with processing.`);
 
         const { title, snippet } = await fetchArticleDetails(articleUrl);
-        // Title and snippet can be null if fetchArticleDetails fails gracefully for certain sites (e.g. X.com)
 
+        if (snippet === 'Could not fetch content. The source may be dynamic or protected.') {
+            console.error(`[POST /api/submit-article-url] Failed to fetch content for URL: ${articleUrl} (Title: \"${title}\"). Aborting processing for this URL.`);
+            return res.status(502).json({ // 502 Bad Gateway indicates an issue with the upstream server (the article source)
+                message: `Failed to fetch content from the source URL: ${articleUrl}. Article not processed.`,
+                details: `The external site may be blocking automated access, or the content is otherwise inaccessible.`
+            });
+        }
+
+        // Title and snippet can be null if fetchArticleDetails fails gracefully for certain sites (e.g. X.com)
         let summary = null; // Initialize summary
         const isXUrl = articleUrl.includes('x.com') || articleUrl.includes('twitter.com');
 
