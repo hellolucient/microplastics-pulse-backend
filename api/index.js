@@ -20,6 +20,7 @@ const allowedOrigins = [
   'https://www.microplasticswatch.com',    // Your new custom domain
   'http://localhost:3000',                 // For local development (React default)
   'http://localhost:5173',                 // For local development (Vite default)
+  'https://microplastics-pulse-git-frontend-redesign-lucients-projects.vercel.app' // New preview URL
 ];
 
 app.use(cors({
