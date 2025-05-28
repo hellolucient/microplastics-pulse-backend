@@ -7,6 +7,7 @@ const axios = require('axios');
 const { put } = require('@vercel/blob'); // Added Vercel Blob import
 const cheerio = require('cheerio'); // Added Cheerio
 const he = require('he'); // Added he library
+const nodemailer = require('nodemailer'); // Add nodemailer
 // const cron = require('node-cron'); // Removed for Vercel Serverless
 
 const app = express();
@@ -1077,6 +1078,54 @@ app.post('/api/whitepaper-signup', async (req, res) => {
   }
 });
 // --- End Whitepaper Signup Endpoint ---
+
+// --- Contact Form Endpoint ---
+app.post('/api/contact', async (req, res) => {
+  const { name, email, subject, message } = req.body;
+
+  if (!name || !email || !subject || !message) {
+    return res.status(400).json({ error: 'All fields are required.' });
+  }
+
+  if (!/\S+@\S+\.\S+/.test(email)) {
+    return res.status(400).json({ error: 'Invalid email format.' });
+  }
+
+  // Create a transporter object using SMTP transport
+  // You will need to set these environment variables in Vercel:
+  // EMAIL_SMTP_HOST, EMAIL_SMTP_PORT, EMAIL_SMTP_USER, EMAIL_SMTP_PASS
+  let transporter = nodemailer.createTransport({
+    host: process.env.EMAIL_SMTP_HOST, // e.g., 'smtp.example.com'
+    port: parseInt(process.env.EMAIL_SMTP_PORT || '587', 10), // e.g., 587 or 465
+    secure: parseInt(process.env.EMAIL_SMTP_PORT || '587', 10) === 465, // true for 465, false for other ports
+    auth: {
+      user: process.env.EMAIL_SMTP_USER, // your smtp username
+      pass: process.env.EMAIL_SMTP_PASS, // your smtp password
+    },
+    // Optional: Add debug and logger for troubleshooting in Vercel logs
+    // debug: true, // show debug output
+    // logger: true // log information in console
+  });
+
+  const mailOptions = {
+    from: `"${name}" <${email}>`, // sender address (appears as the user who filled the form)
+    to: 'info@microplastics.com', // list of receivers
+    replyTo: email, // So replies go to the user's email
+    subject: `Contact Form: ${subject}`,
+    text: message,
+    html: `<p>Name: ${name}</p><p>Email: ${email}</p><p>Subject: ${subject}</p><p>Message: ${message.replace(/\n/g, '<br>')}</p>`,
+  };
+
+  try {
+    await transporter.sendMail(mailOptions);
+    console.log('Contact form email sent successfully.');
+    res.status(200).json({ message: 'Message sent successfully!' });
+  } catch (error) {
+    console.error('Error sending contact form email:', error);
+    res.status(500).json({ error: 'Failed to send message. Please try again later.' });
+  }
+});
+// --- End Contact Form Endpoint ---
 
 app.post('/api/submit-article-url', async (req, res) => {
     console.log('[POST /api/submit-article-url] Received request:', req.body);
