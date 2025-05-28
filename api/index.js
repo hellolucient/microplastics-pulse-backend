@@ -1109,7 +1109,7 @@ app.post('/api/contact', async (req, res) => {
 
   const mailOptions = {
     from: `"${name}" <${email}>`, // sender address (appears as the user who filled the form)
-    to: 'info@microplastics.com', // list of receivers
+    to: 'microplasticswatch@gmail.com', // Send directly to your Gmail
     replyTo: email, // So replies go to the user's email
     subject: `Contact Form: ${subject}`,
     text: message,
