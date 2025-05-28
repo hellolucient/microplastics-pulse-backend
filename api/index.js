@@ -18,21 +18,37 @@ app.use(express.json());
 const allowedOrigins = [
   'https://microplastics-pulse.vercel.app', // Your original Vercel frontend URL
   'https://www.microplasticswatch.com',    // Your new custom domain
+  'https://microplasticswatch.com',        // Added non-www version
   'http://localhost:3000',                 // For local development (React default)
   'http://localhost:5173',                 // For local development (Vite default)
-  'https://microplastics-pulse-git-frontend-redesign-lucients-projects.vercel.app' // New preview URL
+  /https:\/\/microplastics-pulse-frontend.*\\.vercel\\.app$/ // Regex for Vercel frontend previews
 ];
 
 app.use(cors({
   origin: function (origin, callback) {
     // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) return callback(null, true);
-    if (allowedOrigins.indexOf(origin) === -1) {
+
+    let isAllowed = false;
+    for (const allowed of allowedOrigins) {
+      if (typeof allowed === 'string' && allowed === origin) {
+        isAllowed = true;
+        break;
+      }
+      // Check if the allowed entry is a RegExp and test it
+      if (allowed instanceof RegExp && allowed.test(origin)) {
+        isAllowed = true;
+        break;
+      }
+    }
+
+    if (isAllowed) {
+      return callback(null, true);
+    } else {
       const msg = 'The CORS policy for this site does not ' +
                   'allow access from the specified Origin.';
       return callback(new Error(msg), false);
     }
-    return callback(null, true);
   }
 }));
 
