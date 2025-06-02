@@ -214,7 +214,7 @@ async function processEmail(emailData /*, processedEmails - Removed */) {
 
         if (!messageId) {
             console.log('[GmailProcessor] Skipped: Email missing Message-ID.');
-            return;
+            return null; // Return null on skip
         }
 
         let rawDeliveredTo = parsed.headers.get('delivered-to');
@@ -267,12 +267,12 @@ async function processEmail(emailData /*, processedEmails - Removed */) {
 
         if (!foundTargetRecipient) {
             console.log(`Skipped: Email not delivered to ${targetEmail}. Raw Delivered-To was:`, rawDeliveredTo);
-            return;
+            return null; // Return null on skip
         }
 
         if (!approvedSenders.map(s => s.toLowerCase()).includes(fromAddress)) {
             console.log(`Skipped: Sender ${fromAddress} is not in the approved list.`);
-            return;
+            return null; // Return null on skip
         }
 
         console.log('Email passed initial checks (Delivered-To, Approved Sender).');
@@ -282,7 +282,7 @@ async function processEmail(emailData /*, processedEmails - Removed */) {
 
         if (!urlsFound || urlsFound.length === 0) {
             console.log('[GmailProcessor] Skipped: No URL found in the email body.');
-            return;
+            return null; // Return null on skip
         }
 
         const extractedUrl = urlsFound[0]; // Take the first URL
@@ -306,7 +306,7 @@ async function processEmail(emailData /*, processedEmails - Removed */) {
 
                 if (existingArticle) {
                     console.log(`[GmailProcessor] Skipped: URL ${extractedUrl} already exists in Supabase database.`);
-                    return; // URL already processed and in DB
+                    return null; // URL already processed and in DB
                 }
                 console.log(`[GmailProcessor] URL ${extractedUrl} is new to Supabase.`);
             } catch (supaCheckError) {
@@ -322,16 +322,25 @@ async function processEmail(emailData /*, processedEmails - Removed */) {
             console.log(`[GmailProcessor] Sending POST request to ${GENERATION_ENDPOINT} with URL: ${extractedUrl}`);
             const response = await axios.post(GENERATION_ENDPOINT, { url: extractedUrl });
             console.log('Successfully sent data to generation endpoint:', response.status, response.data);
+            return null; // Success
         } catch (apiError) {
             console.error('Error sending POST request to generation endpoint:', apiError.message);
             if (apiError.response) {
                 console.error('API Error Response Data:', apiError.response.data);
                 console.error('API Error Response Status:', apiError.response.status);
+                if (apiError.response.status === 502) {
+                    console.warn(`[GmailProcessor] URL ${extractedUrl} failed with 502 from generation endpoint. Adding to failed list.`);
+                    return extractedUrl; // Failed with 502, return URL
+                }
             }
+            // For other errors, or if no response, still log but don't necessarily add to failed list for retry via this mechanism
+            // or treat as a different kind of failure. For now, just return null.
+            return null; 
         }
 
     } catch (parseError) {
         console.error('[GmailProcessor] Error parsing email:', parseError);
+        return null; // Error during parsing
     }
 }
 
@@ -339,7 +348,14 @@ async function main() {
     console.log('[GmailProcessor] Starting email processing script...');
     let imap;
     let newestEmailDateProcessed = null; // To keep track of the latest email date we actually processed
-    
+    const failedUrls = []; // Initialize list for failed URLs
+    let processingStatus = { // Object to hold results
+        processedCount: 0,
+        failedCount: 0,
+        failedUrls: [],
+        message: ''
+    };
+
     try {
         imap = await connectToGmail();
         const searchResult = await searchEmails(imap); // searchEmails now returns an object
@@ -347,57 +363,62 @@ async function main() {
         const newestEmailFetchedThisBatch = searchResult.newestEmailDate; // This is the latest date from IMAP attributes
 
         if (emailsData && emailsData.length > 0) {
-            console.log(`[GmailProcessor] Processing ${emailsData.length} fetched emails.`);
+            processingStatus.message = `[GmailProcessor] Processing ${emailsData.length} fetched emails.`;
+            console.log(processingStatus.message);
             for (const emailData of emailsData) {
-                await processEmail(emailData);
-                // If processEmail were to return a status or the email's date upon successful processing,
-                // we could use that to update newestEmailDateProcessed.
-                // For now, we'll assume if emails were fetched, the newestEmailFetchedThisBatch is relevant.
+                const failedUrl = await processEmail(emailData);
+                if (failedUrl) {
+                    failedUrls.push(failedUrl);
+                    processingStatus.failedCount++;
+                } else {
+                    // Assuming null means success or skipped for valid reasons (already processed, not approved etc)
+                    // We might want to be more granular if processEmail returns different types of nulls
+                    processingStatus.processedCount++; 
+                }
             }
-            // After successfully processing all emails in the batch,
-            // update the last check timestamp using the newest email date from THIS batch.
             if (newestEmailFetchedThisBatch) {
-                newestEmailDateProcessed = newestEmailFetchedThisBatch; // Mark this as the point to continue from
+                newestEmailDateProcessed = newestEmailFetchedThisBatch;
             }
         } else {
-            console.log('[GmailProcessor] No new emails to process.');
-            // If no emails were found, we could consider updating the timestamp to 'now'
-            // to avoid reprocessing the same "empty" range if the script runs quickly again.
-            // However, if getLastCheckTimestamp() defaults to 24h ago, this might not be necessary.
-            // For now, we only update if new emails were processed.
+            processingStatus.message = '[GmailProcessor] No new emails to process.';
+            console.log(processingStatus.message);
+        }
+
+        processingStatus.failedUrls = failedUrls;
+        if (failedUrls.length > 0) {
+            const failMsg = `[GmailProcessor] ${failedUrls.length} URL(s) failed to process (returned 502).`;
+            console.warn(failMsg);
+            failedUrls.forEach(url => console.warn(`- ${url}`));
+            processingStatus.message += ` ${failMsg}`;
+        } else if (emailsData && emailsData.length > 0) {
+            processingStatus.message += ' All found URLs processed successfully or were skipped appropriately.';
         }
 
     } catch (error) {
-        // Check if error is from searchEmails and contains specific structure
+        const errorMsg = 'An error occurred in the Gmail processing main process.';
+        console.error(errorMsg, error);
+        processingStatus.message = `${errorMsg} Details: ${error.message}`;
+        // Still return failedUrls accumulated so far, if any
+        processingStatus.failedUrls = failedUrls; 
         if (error && error.error && error.emailsData !== undefined && error.newestEmailDate !== undefined) {
-            console.error('An error occurred during email search:', error.error);
-        } else {
-            console.error('An error occurred in the main process:', error);
+            console.error('Specific error during email search:', error.error);
+            processingStatus.message = `Error during email search: ${error.error.message || error.error}`;
         }
     } finally {
         if (imap) {
             imap.end();
         }
-        // Update the timestamp only if we successfully processed some emails
         if (newestEmailDateProcessed) {
             await updateLastCheckTimestamp(newestEmailDateProcessed);
         } else {
-            // If no emails were processed but the script ran, consider updating the timestamp to 'now'
-            // to prevent the next run from re-scanning a large old range if getLastCheckTimestamp returns null.
-            // This is a trade-off: if an email arrives between this 'now' and the actual last email time, it might be missed
-            // if the very next run uses this 'now'.
-            // A safer bet is to only update if emails were successfully fetched and processed.
-            // Or, if no emails found, update to the 'sinceDate' that was used for the search IF it was recent.
-            // For simplicity now: only update on successful processing of new emails.
-            // If getLastCheckTimestamp() defaults to 24h ago, and we find nothing, the next run will again check 24h from its 'now'.
-            // This is reasonable for a manual trigger.
             const lastChecked = await getLastCheckTimestamp();
-            if (!lastChecked) { // If there was no prior record, and we found no emails
+            if (!lastChecked && (!emailsData || emailsData.length === 0)) { // Check if emailsData is undefined or empty
                 console.log("[GmailProcessor] No prior timestamp and no new emails. Setting 'last check' to now to avoid large future scans.");
-                await updateLastCheckTimestamp(new Date()); // Set to current time
+                await updateLastCheckTimestamp(new Date());
             }
         }
         console.log('Email processing script finished.');
+        return processingStatus; // Return the processing status object
     }
 }
 

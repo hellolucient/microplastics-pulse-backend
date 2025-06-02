@@ -1292,18 +1292,84 @@ app.get('/api/cron/check-emails', async (req, res) => {
 
     if (!gmailProcessorMain) {
         console.error('[CRON /api/cron/check-emails] Gmail processor script not loaded. Final check failed. Cannot run email check.'); // Modified this log for clarity
-        return res.status(500).json({ message: 'Email processing script not available. Investigation required.'});
+        return res.status(500).json({ 
+            message: 'Email processing script not available. Investigation required.',
+            processedCount: 0,
+            failedCount: 0,
+            failedUrls: [] 
+        });
     }
 
     try {
         // Execute the main function from the gmail-processor script
         // This is an async function, so we await its completion.
-        await gmailProcessorMain();
+        const processingResult = await gmailProcessorMain(); // Capture the result
+        
         console.log('[CRON /api/cron/check-emails] Email check process completed.');
-        return res.status(200).json({ message: 'Email check process triggered successfully.' });
+        console.log(`[CRON /api/cron/check-emails] Processing summary: ${processingResult.message}`);
+        if (processingResult.failedUrls && processingResult.failedUrls.length > 0) {
+            console.warn(`[CRON /api/cron/check-emails] Failed URLs: ${processingResult.failedUrls.join(', ')}`);
+        }
+
+        return res.status(200).json({ 
+            message: processingResult.message || 'Email check process triggered and completed.', 
+            processedCount: processingResult.processedCount,
+            failedCount: processingResult.failedCount,
+            failedUrls: processingResult.failedUrls 
+        });
     } catch (error) {
         console.error('[CRON /api/cron/check-emails] Error during email check process:', error);
-        return res.status(500).json({ message: 'Error during email check process.', details: error.message });
+        return res.status(500).json({ 
+            message: 'Error during email check process.', 
+            details: error.message,
+            processedCount: 0, // Or from a partially completed result if available
+            failedCount: 0,
+            failedUrls: [] // Or from a partially completed result
+        });
+    }
+});
+
+// New Admin Endpoint to trigger email check and get results
+app.get('/api/admin/check-submitted-emails', async (req, res) => {
+    // TODO: Add authentication/authorization to ensure only admins can call this.
+    // For now, it's open like the cron endpoint but should be secured.
+    // Consider using a middleware that checks for an admin user session.
+
+    console.log('[/api/admin/check-submitted-emails] Admin request received to check emails.');
+
+    if (!gmailProcessorMain) {
+        console.error('[/api/admin/check-submitted-emails] Gmail processor script not loaded.');
+        return res.status(500).json({
+            message: 'Email processing script not available. Backend issue.',
+            processedCount: 0,
+            failedCount: 0,
+            failedUrls: []
+        });
+    }
+
+    try {
+        const processingResult = await gmailProcessorMain();
+        console.log('[/api/admin/check-submitted-emails] Email check process completed.');
+        console.log(`[/api/admin/check-submitted-emails] Processing summary: ${processingResult.message}`);
+        if (processingResult.failedUrls && processingResult.failedUrls.length > 0) {
+            console.warn(`[/api/admin/check-submitted-emails] Failed URLs: ${processingResult.failedUrls.join(', ')}`);
+        }
+
+        return res.status(200).json({
+            message: processingResult.message || 'Email check process completed.',
+            processedCount: processingResult.processedCount,
+            failedCount: processingResult.failedCount,
+            failedUrls: processingResult.failedUrls
+        });
+    } catch (error) {
+        console.error('[/api/admin/check-submitted-emails] Error during email check process:', error);
+        return res.status(500).json({
+            message: 'Error during email check process on admin trigger.',
+            details: error.message,
+            processedCount: 0,
+            failedCount: 0,
+            failedUrls: [] 
+        });
     }
 });
 
