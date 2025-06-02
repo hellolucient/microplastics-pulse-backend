@@ -16,7 +16,7 @@
     }
   ],
   "functions": { 
-    "api/index.js": {
+    "api/**/*.js": {
       "maxDuration": 300
     }
   }
