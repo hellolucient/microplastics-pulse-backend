@@ -162,7 +162,15 @@ async function searchEmails(imap) {
                     return;
                 }
 
-                const f = imap.fetch(results, { bodies: '', markSeen: false }); // Fetch entire messages, explicitly don't mark as seen
+                // --- Batching Logic ---
+                const BATCH_SIZE = 10;
+                // The 'results' array is typically sorted oldest to newest.
+                // We'll process a small batch of the oldest ones to avoid timeouts.
+                const batchResults = results.slice(0, BATCH_SIZE);
+                console.log(`[GmailProcessor] Processing a batch of ${batchResults.length} of ${results.length} total found emails.`);
+                // --- End Batching Logic ---
+
+                const f = imap.fetch(batchResults, { bodies: '', markSeen: false }); // Fetch the limited batch, explicitly don't mark as seen
                 const emailsData = [];
                 let currentBatchLatestDate = null;
 
