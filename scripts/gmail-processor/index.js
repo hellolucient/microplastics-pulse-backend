@@ -328,13 +328,14 @@ async function processEmail(emailData /*, processedEmails - Removed */) {
             if (apiError.response) {
                 console.error('API Error Response Data:', apiError.response.data);
                 console.error('API Error Response Status:', apiError.response.status);
-                if (apiError.response.status === 502) {
-                    console.warn(`[GmailProcessor] URL ${extractedUrl} failed with 502 from generation endpoint. Adding to failed list.`);
-                    return extractedUrl; // Failed with 502, return URL
+                // Let's consider any 5xx error as a potential temporary server issue
+                if (apiError.response.status >= 500 && apiError.response.status <= 599) {
+                    console.warn(`[GmailProcessor] URL ${extractedUrl} failed with ${apiError.response.status} from generation endpoint. Adding to failed list for retry.`);
+                    return extractedUrl; // Failed with a server error, return URL
                 }
             }
-            // For other errors, or if no response, still log but don't necessarily add to failed list for retry via this mechanism
-            // or treat as a different kind of failure. For now, just return null.
+            // For other errors (e.g., 4xx client errors) or if no response, it's likely not something a retry will fix.
+            // Log it, but treat as "processed" so we don't get stuck on it.
             return null; 
         }
 
@@ -355,10 +356,12 @@ async function main() {
         failedUrls: [],
         message: ''
     };
+    let searchResult; // Hoist searchResult to be available in finally
+    let scriptError = null; // To track if an error occurred
 
     try {
         imap = await connectToGmail();
-        const searchResult = await searchEmails(imap); // searchEmails now returns an object
+        searchResult = await searchEmails(imap); // searchEmails now returns an object
         const emailsData = searchResult.emailsData;
         const newestEmailFetchedThisBatch = searchResult.newestEmailDate; // This is the latest date from IMAP attributes
 
@@ -404,19 +407,26 @@ async function main() {
             console.error('Specific error during email search:', error.error);
             processingStatus.message = `Error during email search: ${error.error.message || error.error}`;
         }
+        scriptError = error; // Capture the error
     } finally {
         if (imap) {
             imap.end();
         }
+
         if (newestEmailDateProcessed) {
+            // Happy path: we found and processed emails. Update timestamp to the newest one.
             await updateLastCheckTimestamp(newestEmailDateProcessed);
+        } else if (!scriptError && searchResult && searchResult.emailsData && searchResult.emailsData.length === 0) {
+            // No new mail case: The script ran successfully but found nothing new.
+            // Update the timestamp to now to prevent re-scanning the same old window.
+            console.log("[GmailProcessor] No new emails were found. Updating timestamp to current time.");
+            await updateLastCheckTimestamp(new Date());
         } else {
-            const lastChecked = await getLastCheckTimestamp();
-            if (!lastChecked && (!emailsData || emailsData.length === 0)) { // Check if emailsData is undefined or empty
-                console.log("[GmailProcessor] No prior timestamp and no new emails. Setting 'last check' to now to avoid large future scans.");
-                await updateLastCheckTimestamp(new Date());
-            }
+            // Error case: An error occurred during the process, so we DON'T update the timestamp.
+            // This ensures we retry the same time frame on the next run.
+            console.log("[GmailProcessor] Script finished with errors or did not complete search. Timestamp will not be updated to preserve the last successful check point.");
         }
+        
         console.log('Email processing script finished.');
         return processingStatus; // Return the processing status object
     }
