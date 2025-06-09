@@ -173,18 +173,32 @@ async function searchEmails(imap) {
             }
             console.log('INBOX opened.');
 
+            // --- Build Filter Criteria ---
+            let fromCriteria = [];
+            if (approvedSenders.length > 0) {
+                const criteria = approvedSenders.map(sender => ['FROM', sender]);
+                if (criteria.length === 1) {
+                    fromCriteria = criteria[0];
+                } else {
+                    // Build a nested OR structure e.g. ['OR', a, ['OR', b, c]]
+                    let nestedOr = ['OR', criteria[criteria.length - 2], criteria[criteria.length - 1]];
+                    for (let i = criteria.length - 3; i >= 0; i--) {
+                        nestedOr = ['OR', criteria[i], nestedOr];
+                    }
+                    fromCriteria = nestedOr;
+                }
+            }
+            // --- End Build Filter Criteria ---
+
             let searchCriteria;
             const lastUid = await getLastCheckUid();
 
             if (lastUid) {
-                // UID-based search: More reliable for preventing reprocessing.
-                // UIDs are always increasing. Search for the next UID onwards.
                 const nextUid = lastUid + 1;
                 searchCriteria = [['UID', `${nextUid}:*`]];
                 console.log(`[GmailProcessor] Using UID-based search. Searching for emails with UID > ${lastUid}`);
             } else {
-                // Fallback to date-based search if no UID is stored (e.g., first run ever).
-                let sinceDate = await getLastCheckTimestamp(); // Keep for one last time
+                let sinceDate = await getLastCheckTimestamp(); // Fallback for first run
                 if (!sinceDate) {
                     console.log('[GmailProcessor] No last UID or timestamp. Defaulting to search emails from the last 24 hours.');
                     sinceDate = new Date();
@@ -193,6 +207,12 @@ async function searchEmails(imap) {
                 searchCriteria = [['SINCE', sinceDate]];
                 console.log(`[GmailProcessor] Using date-based search (fallback). Searching since: ${sinceDate.toISOString()}`);
             }
+
+            // Add the sender filter to the search criteria
+            if (fromCriteria.length > 0) {
+                searchCriteria.push(fromCriteria);
+            }
+            console.log('[GmailProcessor] Searching with criteria:', JSON.stringify(searchCriteria));
 
             imap.search(searchCriteria, (searchErr, results) => {
                 if (searchErr) {
