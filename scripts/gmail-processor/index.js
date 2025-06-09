@@ -25,6 +25,56 @@ if (supabaseUrl && supabaseServiceKey) {
 // --- Supabase Helper Functions for Timestamp ---
 const SCRIPT_METADATA_TABLE = 'script_metadata';
 const LAST_CHECK_TIMESTAMP_KEY = 'last_email_check_timestamp';
+const LAST_CHECK_UID_KEY = 'last_email_check_uid'; // New key for UID tracking
+
+async function getLastCheckUid() {
+    if (!supabase) {
+        console.warn('[GmailProcessor] Supabase client not initialized. Cannot get last check UID.');
+        return null;
+    }
+    try {
+        const { data, error } = await supabase
+            .from(SCRIPT_METADATA_TABLE)
+            .select('value')
+            .eq('key', LAST_CHECK_UID_KEY)
+            .maybeSingle();
+
+        if (error) {
+            console.error('[GmailProcessor] Error fetching last check UID from Supabase:', error.message);
+            return null;
+        }
+        if (data && data.value) {
+            const uid = parseInt(data.value, 10);
+            console.log(`[GmailProcessor] Retrieved last check UID: ${uid}`);
+            return isNaN(uid) ? null : uid;
+        }
+        console.log('[GmailProcessor] No last check UID found in Supabase.');
+        return null;
+    } catch (e) {
+        console.error('[GmailProcessor] Exception fetching last check UID:', e.message);
+        return null;
+    }
+}
+
+async function updateLastCheckUid(uid) {
+    if (!supabase) {
+        console.warn('[GmailProcessor] Supabase client not initialized. Cannot update last check UID.');
+        return;
+    }
+    try {
+        const { error } = await supabase
+            .from(SCRIPT_METADATA_TABLE)
+            .upsert({ key: LAST_CHECK_UID_KEY, value: uid.toString() }, { onConflict: 'key' });
+
+        if (error) {
+            console.error('[GmailProcessor] Error updating last check UID in Supabase:', error.message);
+        } else {
+            console.log(`[GmailProcessor] Successfully updated last check UID to: ${uid}`);
+        }
+    } catch (e) {
+        console.error('[GmailProcessor] Exception updating last check UID:', e.message);
+    }
+}
 
 async function getLastCheckTimestamp() {
     if (!supabase) {
@@ -99,7 +149,8 @@ function connectToGmail() {
             resolve(imap);
         });
 
-        imap.once('error', (err) => {
+        // Use 'on' to catch any errors that might occur after the initial connection
+        imap.on('error', (err) => {
             console.error('IMAP connection error:', err);
             reject(err);
         });
@@ -122,93 +173,87 @@ async function searchEmails(imap) {
             }
             console.log('INBOX opened.');
 
-            let sinceDate = await getLastCheckTimestamp();
-            let newestEmailDateThisBatch = null;
+            let searchCriteria;
+            const lastUid = await getLastCheckUid();
 
-            if (!sinceDate) {
-                console.log('[GmailProcessor] Defaulting to search emails from the last 24 hours.');
-                sinceDate = new Date();
-                sinceDate.setDate(sinceDate.getDate() - 1); // Default to 24 hours ago
+            if (lastUid) {
+                // UID-based search: More reliable for preventing reprocessing.
+                // UIDs are always increasing. Search for the next UID onwards.
+                const nextUid = lastUid + 1;
+                searchCriteria = [['UID', `${nextUid}:*`]];
+                console.log(`[GmailProcessor] Using UID-based search. Searching for emails with UID > ${lastUid}`);
             } else {
-                console.log(`[GmailProcessor] Using stored timestamp. Searching for emails since: ${sinceDate.toISOString()}`);
-            }
-            
-            // Ensure sinceDate is a Date object for the library
-            if (!(sinceDate instanceof Date)) {
-                console.warn("[GmailProcessor] sinceDate was not a Date object, attempting to parse. This shouldn't happen.");
-                try {
-                    sinceDate = new Date(sinceDate);
-                    if (isNaN(sinceDate.getTime())) throw new Error("Invalid date after parsing");
-                } catch (dateParseError) {
-                    console.error("[GmailProcessor] Failed to parse sinceDate, defaulting to 24 hours ago.", dateParseError);
+                // Fallback to date-based search if no UID is stored (e.g., first run ever).
+                let sinceDate = await getLastCheckTimestamp(); // Keep for one last time
+                if (!sinceDate) {
+                    console.log('[GmailProcessor] No last UID or timestamp. Defaulting to search emails from the last 24 hours.');
                     sinceDate = new Date();
                     sinceDate.setDate(sinceDate.getDate() - 1);
                 }
+                searchCriteria = [['SINCE', sinceDate]];
+                console.log(`[GmailProcessor] Using date-based search (fallback). Searching since: ${sinceDate.toISOString()}`);
             }
 
-            // The imap library expects a Date object for SINCE.
-            // No need to format to YYYY-MM-DD string if passing a Date object.
-            console.log(`Searching for emails SINCE criteria: ${sinceDate.toISOString()} (UTC) / ${sinceDate.toString()} (Local)`);
-
-            imap.search([['SINCE', sinceDate]], (searchErr, results) => {
+            imap.search(searchCriteria, (searchErr, results) => {
                 if (searchErr) {
                     console.error('Email search error:', searchErr);
-                    reject({ emailsData: [], newestEmailDate: null, error: searchErr });
+                    reject({ emailsData: [], newestEmailUid: null, error: searchErr });
                     return;
                 }
                 console.log(`Found ${results.length} email(s).`);
                 if (results.length === 0) {
-                    resolve({ emailsData: [], newestEmailDate: null });
+                    resolve({ emailsData: [], newestEmailUid: null });
                     return;
                 }
 
                 // --- Batching Logic ---
                 const BATCH_SIZE = 10;
-                // The 'results' array is typically sorted oldest to newest.
-                // We'll process a small batch of the oldest ones to avoid timeouts.
                 const batchResults = results.slice(0, BATCH_SIZE);
                 console.log(`[GmailProcessor] Processing a batch of ${batchResults.length} of ${results.length} total found emails.`);
                 // --- End Batching Logic ---
 
-                const f = imap.fetch(batchResults, { bodies: '', markSeen: false }); // Fetch the limited batch, explicitly don't mark as seen
+                if (batchResults.length === 0) {
+                    // This can happen if results has items but slice is empty, though unlikely.
+                    resolve({ emailsData: [], newestEmailUid: null });
+                    return;
+                }
+
+                const f = imap.fetch(batchResults, { bodies: '', markSeen: false }); // Fetch the limited batch
                 const emailsData = [];
-                let currentBatchLatestDate = null;
+                let currentBatchLatestUid = null;
 
                 f.on('message', (msg, seqno) => {
                     console.log(`Fetching message #${seqno}`);
                     let buffer = '';
-                    // let headers = null; // Not used directly here, parsed later
-
+                    
                     msg.on('body', (stream, info) => {
                         stream.on('data', (chunk) => {
                             buffer += chunk.toString('utf8');
                         });
-                        // stream.once('end', () => {}); // Not strictly needed here
                     });
                     msg.once('attributes', (attrs) => {
-                        // attrs.date is the internal date of the email
-                        if (attrs.date) {
-                            const emailDate = new Date(attrs.date);
-                            if (!currentBatchLatestDate || emailDate > currentBatchLatestDate) {
-                                currentBatchLatestDate = emailDate;
+                        // attrs.uid is the UID of the email
+                        if (attrs.uid) {
+                            // The UIDs might not be in order, so we find the max UID in the batch.
+                            if (currentBatchLatestUid === null || attrs.uid > currentBatchLatestUid) {
+                                currentBatchLatestUid = attrs.uid;
                             }
                         }
                     });
                     msg.once('end', () => {
-                        emailsData.push({ buffer }); // Headers will be parsed by simpleParser
+                        emailsData.push({ buffer }); 
                     });
                 });
 
                 f.once('error', (fetchErr) => {
                     console.error('Fetch error:', fetchErr);
-                    reject({ emailsData: [], newestEmailDate: null, error: fetchErr });
+                    reject({ emailsData: [], newestEmailUid: null, error: fetchErr });
                 });
 
                 f.once('end', () => {
                     console.log('Finished fetching all messages.');
-                    newestEmailDateThisBatch = currentBatchLatestDate;
-                    console.log(`Newest email date in this batch: ${newestEmailDateThisBatch ? newestEmailDateThisBatch.toISOString() : 'N/A'}`);
-                    resolve({ emailsData, newestEmailDate: newestEmailDateThisBatch });
+                    console.log(`Newest email UID in this batch: ${currentBatchLatestUid || 'N/A'}`);
+                    resolve({ emailsData, newestEmailUid: currentBatchLatestUid });
                 });
             });
         });
@@ -355,8 +400,7 @@ async function processEmail(emailData /*, processedEmails - Removed */) {
 
 async function main() {
     console.log('[GmailProcessor] Starting email processing script...');
-    let imap;
-    let newestEmailDateProcessed = null; // To keep track of the latest email date we actually processed
+    let newestEmailUidProcessed = null; // Use UID for tracking
     const failedUrls = []; // Initialize list for failed URLs
     let processingStatus = { // Object to hold results
         processedCount: 0,
@@ -368,10 +412,23 @@ async function main() {
     let scriptError = null; // To track if an error occurred
 
     try {
-        imap = await connectToGmail();
-        searchResult = await searchEmails(imap); // searchEmails now returns an object
+        // --- Fetching Stage ---
+        // Connect, fetch emails, and disconnect immediately to avoid idle timeouts.
+        const imap = await connectToGmail();
+        try {
+            searchResult = await searchEmails(imap);
+        } finally {
+            if (imap) {
+                imap.end();
+                console.log('[GmailProcessor] IMAP connection ended after fetching batch.');
+            }
+        }
+        // --- End Fetching Stage ---
+
+        // --- Processing Stage ---
+        // Now process the emails from memory. The IMAP connection is closed.
         const emailsData = searchResult.emailsData;
-        const newestEmailFetchedThisBatch = searchResult.newestEmailDate; // This is the latest date from IMAP attributes
+        const newestEmailFetchedThisBatch = searchResult.newestEmailUid; // This is the latest UID from IMAP attributes
 
         if (emailsData && emailsData.length > 0) {
             processingStatus.message = `[GmailProcessor] Processing ${emailsData.length} fetched emails.`;
@@ -388,7 +445,7 @@ async function main() {
                 }
             }
             if (newestEmailFetchedThisBatch) {
-                newestEmailDateProcessed = newestEmailFetchedThisBatch;
+                newestEmailUidProcessed = newestEmailFetchedThisBatch;
             }
         } else {
             processingStatus.message = '[GmailProcessor] No new emails to process.';
@@ -411,28 +468,26 @@ async function main() {
         processingStatus.message = `${errorMsg} Details: ${error.message}`;
         // Still return failedUrls accumulated so far, if any
         processingStatus.failedUrls = failedUrls; 
-        if (error && error.error && error.emailsData !== undefined && error.newestEmailDate !== undefined) {
+        if (error && error.error && error.emailsData !== undefined && error.newestEmailUid !== undefined) {
             console.error('Specific error during email search:', error.error);
             processingStatus.message = `Error during email search: ${error.error.message || error.error}`;
         }
         scriptError = error; // Capture the error
     } finally {
-        if (imap) {
-            imap.end();
-        }
+        // The imap.end() call is no longer here, it's handled in the try block.
 
-        if (newestEmailDateProcessed) {
-            // Happy path: we found and processed emails. Update timestamp to the newest one.
-            await updateLastCheckTimestamp(newestEmailDateProcessed);
+        if (newestEmailUidProcessed) {
+            // Happy path: we found and processed emails. Update UID to the newest one.
+            await updateLastCheckUid(newestEmailUidProcessed);
         } else if (!scriptError && searchResult && searchResult.emailsData && searchResult.emailsData.length === 0) {
             // No new mail case: The script ran successfully but found nothing new.
-            // Update the timestamp to now to prevent re-scanning the same old window.
-            console.log("[GmailProcessor] No new emails were found. Updating timestamp to current time.");
-            await updateLastCheckTimestamp(new Date());
+            // We don't need to update the UID here, it's already at the latest.
+            // We could update a 'last_successful_run' timestamp if desired for monitoring.
+            console.log("[GmailProcessor] No new emails were found. Last processed UID remains unchanged.");
         } else {
-            // Error case: An error occurred during the process, so we DON'T update the timestamp.
-            // This ensures we retry the same time frame on the next run.
-            console.log("[GmailProcessor] Script finished with errors or did not complete search. Timestamp will not be updated to preserve the last successful check point.");
+            // Error case: An error occurred during the process, so we DON'T update the UID.
+            // This ensures we retry the same UID range on the next run.
+            console.log("[GmailProcessor] Script finished with errors or did not complete search. UID will not be updated to preserve the last successful check point.");
         }
         
         console.log('Email processing script finished.');
