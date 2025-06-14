@@ -25,8 +25,9 @@
     "imap": "^0.8.19",
     "mailparser": "^3.7.2",
     "node-cron": "^3.0.3",
+    "node-fetch": "^2.6.7",
     "nodemailer": "^7.0.3",
     "openai": "^4.97.0",
-    "twitter-api-v2": "1.23.2"
+    "twitter-api-v2": "1.18.1"
   }
 }
