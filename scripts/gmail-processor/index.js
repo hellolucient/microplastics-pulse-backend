@@ -280,241 +280,140 @@ async function searchEmails(imap) {
     });
 }
 
-async function processEmail(emailData /*, processedEmails - Removed */) {
+async function processEmail(emailData, urlProcessor) {
     try {
         const parsed = await simpleParser(emailData.buffer);
-        const messageId = parsed.messageId; // Keep for logging for now, but not for primary duplicate check
+        const messageId = parsed.messageId;
 
         if (!messageId) {
             console.log('[GmailProcessor] Skipped: Email missing Message-ID.');
-            return null; // Return null on skip
+            return { success: true, skipped: true };
         }
 
         let rawDeliveredTo = parsed.headers.get('delivered-to');
         let foundTargetRecipient = false;
         const targetEmail = 'submit@microplasticswatch.com';
 
-        console.log(`Raw 'delivered-to' header from mailparser:`, rawDeliveredTo);
-
         if (rawDeliveredTo) {
-            if (Array.isArray(rawDeliveredTo)) {
-                for (const item of rawDeliveredTo) {
-                    if (typeof item === 'string' && item.toLowerCase().includes(targetEmail)) {
-                        foundTargetRecipient = true;
-                        break;
-                    } else if (typeof item === 'object' && item && typeof item.text === 'string' && item.text.toLowerCase().includes(targetEmail)) {
-                        foundTargetRecipient = true;
-                        break;
-                    } else if (typeof item === 'object' && item && item.value && typeof item.value === 'string' && item.value.toLowerCase().includes(targetEmail)) {
-                        foundTargetRecipient = true;
-                        break;
-                    } else if (typeof item === 'object' && item && item.address && typeof item.address === 'string' && item.address.toLowerCase().includes(targetEmail)) {
-                        foundTargetRecipient = true;
-                        break;
-                    }
-                }
-            } else if (typeof rawDeliveredTo === 'string') {
-                if (rawDeliveredTo.toLowerCase().includes(targetEmail)) {
-                    foundTargetRecipient = true;
-                }
-            } else if (typeof rawDeliveredTo === 'object' && rawDeliveredTo && typeof rawDeliveredTo.text === 'string') {
-                if (rawDeliveredTo.text.toLowerCase().includes(targetEmail)) {
-                    foundTargetRecipient = true;
-                }
-            } else if (typeof rawDeliveredTo === 'object' && rawDeliveredTo && rawDeliveredTo.value && typeof rawDeliveredTo.value === 'string') {
-                if (rawDeliveredTo.value.toLowerCase().includes(targetEmail)) {
-                    foundTargetRecipient = true;
-                }
-            } else if (typeof rawDeliveredTo === 'object' && rawDeliveredTo && rawDeliveredTo.address && typeof rawDeliveredTo.address === 'string') {
-                if (rawDeliveredTo.address.toLowerCase().includes(targetEmail)) {
-                    foundTargetRecipient = true;
-                }
+            const recipientJson = JSON.stringify(rawDeliveredTo).toLowerCase();
+            if (recipientJson.includes(targetEmail)) {
+                foundTargetRecipient = true;
             }
         }
         
         const fromAddress = parsed.from?.value[0]?.address?.toLowerCase() || 'unknown@sender.com';
         const textBody = parsed.text || '';
 
-        console.log(`Processing email from ${fromAddress} with Message-ID: ${messageId}`);
-        console.log(`Was target recipient (${targetEmail}) found in Delivered-To? ${foundTargetRecipient}`);
-
         if (!foundTargetRecipient) {
-            console.log(`Skipped: Email not delivered to ${targetEmail}. Raw Delivered-To was:`, rawDeliveredTo);
-            return null; // Return null on skip
+            return { success: true, skipped: true };
         }
-
         if (!approvedSenders.map(s => s.toLowerCase()).includes(fromAddress)) {
-            console.log(`Skipped: Sender ${fromAddress} is not in the approved list.`);
-            return null; // Return null on skip
+            return { success: true, skipped: true };
         }
-
-        console.log('Email passed initial checks (Delivered-To, Approved Sender).');
 
         const urlRegex = /https?:\/\/[^\s]+/g;
         const urlsFound = textBody.match(urlRegex);
 
         if (!urlsFound || urlsFound.length === 0) {
-            console.log('[GmailProcessor] Skipped: No URL found in the email body.');
-            return null; // Return null on skip
+            return { success: true, skipped: true };
         }
 
-        const extractedUrl = urlsFound[0]; // Take the first URL
-        console.log(`[GmailProcessor] Extracted URL: ${extractedUrl}`);
+        const extractedUrl = urlsFound[0];
 
-        // --- Supabase Duplicate Check ---
-        if (supabase) {
-            try {
-                console.log(`[GmailProcessor] Checking Supabase for duplicate URL: ${extractedUrl}`);
-                const { data: existingArticle, error: dbError } = await supabase
-                    .from('latest_news')
-                    .select('url')
-                    .eq('url', extractedUrl)
-                    .maybeSingle();
+        // NEW: Add a check to specifically skip Google share links
+        if (extractedUrl.includes('share.google')) {
+            console.log(`[GmailProcessor] Skipped: URL is a Google redirect link (${extractedUrl}).`);
+            return { success: true, skipped: true };
+        }
 
-                if (dbError) {
-                    console.error(`[GmailProcessor] Supabase error checking for duplicate URL ${extractedUrl}:`, dbError.message);
-                    // Decide if we should proceed or not. For now, let's proceed but log the error.
-                    // Consider returning here if DB check is critical and fails.
-                }
+        // This is the key change: Call the function directly instead of using axios.
+        if (typeof urlProcessor !== 'function') {
+             console.error('[GmailProcessor] CRITICAL: urlProcessor is not a function. Cannot process URL.');
+             // Return failure, but don't count it as a "failed URL" that should be retried, as it's a code issue.
+             return { success: false, error: 'Internal server error: processor function not provided.' };
+        }
+        
+        console.log(`[GmailProcessor] Calling processor for URL: ${extractedUrl}`);
+        const result = await urlProcessor(extractedUrl);
 
-                if (existingArticle) {
-                    console.log(`[GmailProcessor] Skipped: URL ${extractedUrl} already exists in Supabase database.`);
-                    return null; // URL already processed and in DB
-                }
-                console.log(`[GmailProcessor] URL ${extractedUrl} is new to Supabase.`);
-            } catch (supaCheckError) {
-                console.error(`[GmailProcessor] Unexpected error during Supabase duplicate check for ${extractedUrl}:`, supaCheckError.message);
-                // Proceed with caution or return
-            }
+        if (result.success) {
+            console.log(`[GmailProcessor] Successfully processed URL: ${extractedUrl}. Message: ${result.message}`);
+            return { success: true, skipped: false };
         } else {
-            console.warn('[GmailProcessor] Supabase client not initialized. Skipping database duplicate check. This might lead to reprocessing existing URLs.');
-        }
-        // --- End Supabase Duplicate Check ---
-
-        try {
-            console.log(`[GmailProcessor] Sending POST request to ${GENERATION_ENDPOINT} with URL: ${extractedUrl}`);
-            const response = await axios.post(GENERATION_ENDPOINT, { url: extractedUrl });
-            console.log('Successfully sent data to generation endpoint:', response.status, response.data);
-            return null; // Success
-        } catch (apiError) {
-            console.error('Error sending POST request to generation endpoint:', apiError.message);
-            if (apiError.response) {
-                console.error('API Error Response Data:', apiError.response.data);
-                console.error('API Error Response Status:', apiError.response.status);
-                // Let's consider any 5xx error as a potential temporary server issue
-                if (apiError.response.status >= 500 && apiError.response.status <= 599) {
-                    console.warn(`[GmailProcessor] URL ${extractedUrl} failed with ${apiError.response.status} from generation endpoint. Adding to failed list for retry.`);
-                    return extractedUrl; // Failed with a server error, return URL
-                }
+            console.error(`[GmailProcessor] Failed to process URL ${extractedUrl}. Status: ${result.status}, Message: ${result.message}`);
+            // If the processor determined it was a server-side issue (5xx), we can consider it a failed URL for retry.
+            if (result.status && result.status >= 500) {
+                return { success: false, failedUrl: extractedUrl };
             }
-            // For other errors (e.g., 4xx client errors) or if no response, it's likely not something a retry will fix.
-            // Log it, but treat as "processed" so we don't get stuck on it.
-            return null; 
+            // For other errors (e.g., 4xx), we treat it as processed so we don't get stuck.
+            return { success: true, skipped: true };
         }
 
     } catch (parseError) {
         console.error('[GmailProcessor] Error parsing email:', parseError);
-        return null; // Error during parsing
+        return { success: false, error: 'Email parsing failed' };
     }
 }
 
-async function main() {
+async function main(urlProcessor) {
     console.log('[GmailProcessor] Starting email processing script...');
-    let newestEmailUidProcessed = null; // Use UID for tracking
-    const failedUrls = []; // Initialize list for failed URLs
-    let processingStatus = { // Object to hold results
+    const failedUrls = [];
+    let processingStatus = {
         processedCount: 0,
         failedCount: 0,
         failedUrls: [],
         message: ''
     };
-    let searchResult; // Hoist searchResult to be available in finally
-    let scriptError = null; // To track if an error occurred
+    let searchResult;
+    let scriptError = null;
 
     try {
-        // --- Fetching Stage ---
-        // Connect, fetch emails, and disconnect immediately to avoid idle timeouts.
         const imap = await connectToGmail();
         try {
             searchResult = await searchEmails(imap);
         } finally {
-            if (imap) {
-                imap.end();
-                console.log('[GmailProcessor] IMAP connection ended after fetching batch.');
-            }
+            if (imap) imap.end();
         }
-        // --- End Fetching Stage ---
 
-        // --- Processing Stage ---
-        // Now process the emails from memory. The IMAP connection is closed.
-        const emailsData = searchResult.emailsData;
-        const newestEmailFetchedThisBatch = searchResult.newestEmailUid; // This is the latest UID from IMAP attributes
+        const emailsData = searchResult?.emailsData;
+        const newestEmailFetchedThisBatch = searchResult?.newestEmailUid;
 
         if (emailsData && emailsData.length > 0) {
             processingStatus.message = `[GmailProcessor] Processing ${emailsData.length} fetched emails.`;
-            console.log(processingStatus.message);
             for (const emailData of emailsData) {
-                const failedUrl = await processEmail(emailData);
-                if (failedUrl) {
-                    failedUrls.push(failedUrl);
+                const result = await processEmail(emailData, urlProcessor);
+                if (result.success && !result.skipped) {
+                    processingStatus.processedCount++;
+                } else if (!result.success && result.failedUrl) {
+                    failedUrls.push(result.failedUrl);
                     processingStatus.failedCount++;
-                } else {
-                    // Assuming null means success or skipped for valid reasons (already processed, not approved etc)
-                    // We might want to be more granular if processEmail returns different types of nulls
-                    processingStatus.processedCount++; 
                 }
             }
             if (newestEmailFetchedThisBatch) {
-                newestEmailUidProcessed = newestEmailFetchedThisBatch;
+                await updateLastCheckUid(newestEmailFetchedThisBatch);
             }
         } else {
             processingStatus.message = '[GmailProcessor] No new emails to process.';
-            console.log(processingStatus.message);
         }
 
         processingStatus.failedUrls = failedUrls;
         if (failedUrls.length > 0) {
-            const failMsg = `[GmailProcessor] ${failedUrls.length} URL(s) failed to process (returned 502).`;
-            console.warn(failMsg);
-            failedUrls.forEach(url => console.warn(`- ${url}`));
-            processingStatus.message += ` ${failMsg}`;
-        } else if (emailsData && emailsData.length > 0) {
-            processingStatus.message += ' All found URLs processed successfully or were skipped appropriately.';
+            processingStatus.message += ` ${failedUrls.length} URL(s) failed.`;
         }
 
     } catch (error) {
+        scriptError = error;
         const errorMsg = 'An error occurred in the Gmail processing main process.';
         console.error(errorMsg, error);
         processingStatus.message = `${errorMsg} Details: ${error.message}`;
-        // Still return failedUrls accumulated so far, if any
         processingStatus.failedUrls = failedUrls; 
-        if (error && error.error && error.emailsData !== undefined && error.newestEmailUid !== undefined) {
-            console.error('Specific error during email search:', error.error);
-            processingStatus.message = `Error during email search: ${error.error.message || error.error}`;
-        }
-        scriptError = error; // Capture the error
     } finally {
-        // The imap.end() call is no longer here, it's handled in the try block.
-
-        if (newestEmailUidProcessed) {
-            // Happy path: we found and processed emails. Update UID to the newest one.
-            await updateLastCheckUid(newestEmailUidProcessed);
-        } else if (!scriptError && searchResult && searchResult.emailsData && searchResult.emailsData.length === 0) {
-            // No new mail case: The script ran successfully but found nothing new.
-            // We don't need to update the UID here, it's already at the latest.
-            // We could update a 'last_successful_run' timestamp if desired for monitoring.
-            console.log("[GmailProcessor] No new emails were found. Last processed UID remains unchanged.");
-        } else {
-            // Error case: An error occurred during the process, so we DON'T update the UID.
-            // This ensures we retry the same UID range on the next run.
-            console.log("[GmailProcessor] Script finished with errors or did not complete search. UID will not be updated to preserve the last successful check point.");
+        if (scriptError) {
+            console.log("[GmailProcessor] Script finished with errors. UID will not be updated.");
         }
-        
         console.log('Email processing script finished.');
-        return processingStatus; // Return the processing status object
+        return processingStatus;
     }
 }
 
-// main(); // Remove direct call if it's only meant to be called by cron or manually as a module
-
-module.exports = { main }; // Export the main function 
+module.exports = { main }; 

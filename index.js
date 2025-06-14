@@ -4,7 +4,8 @@ const cors = require('cors'); // Require the cors middleware
 const { createClient } = require('@supabase/supabase-js');
 const { OpenAI } = require('openai');
 const axios = require('axios'); // Keep this for Google Search
-const cron = require('node-cron'); // Keep this for scheduling
+const cron = require('node-cron'); // Add this for scheduling
+const { postSingleTweet } = require('./lib/twitterService');
 
 const app = express();
 const port = process.env.PORT || 3001; // Use environment variable for port or default
@@ -169,6 +170,158 @@ app.get('/api/latest-news', async (req, res) => {
   }
 });
 // --- END ADDED LATEST NEWS ENDPOINT ---
+
+// --- Twitter Integration Endpoints ---
+
+/**
+ * Gets the next three stories that should be posted to Twitter.
+ * Implements the "Oldest, Newest, Second Oldest" strategy.
+ */
+app.get('/api/admin/next-tweet-candidate', async (req, res) => {
+  try {
+    // Fetch two oldest stories that haven't been posted
+    const { data: oldestStories, error: oldestError } = await supabase
+      .from('latest_news')
+      .select('*')
+      .eq('is_posted_to_twitter', false)
+      .order('published_date', { ascending: true })
+      .limit(2);
+
+    if (oldestError) throw oldestError;
+
+    // Fetch the newest story that hasn't been posted
+    const { data: newestStory, error: newestError } = await supabase
+      .from('latest_news')
+      .select('*')
+      .eq('is_posted_to_twitter', false)
+      .order('published_date', { ascending: false })
+      .limit(1)
+      .single(); // We only expect one
+
+    if (newestError) throw newestError;
+
+    // We need to handle cases where there are fewer than 3 stories left
+    if (!oldestStories || oldestStories.length === 0) {
+      return res.status(404).json({ message: 'No more stories to post.' });
+    }
+
+    const candidates = [];
+    if (oldestStories[0]) candidates.push(oldestStories[0]);
+    if (newestStory) candidates.push(newestStory);
+    if (oldestStories[1]) candidates.push(oldestStories[1]);
+    
+    // Remove duplicates in case the oldest and newest are the same
+    const uniqueCandidates = Array.from(new Set(candidates.map(s => s.id)))
+      .map(id => candidates.find(s => s.id === id));
+
+    res.status(200).json(uniqueCandidates);
+
+  } catch (error) {
+    console.error('Error fetching next tweet candidates:', error);
+    res.status(500).json({ error: 'Failed to fetch tweet candidates.', details: error.message });
+  }
+});
+
+
+/**
+ * Posts a tweet for a given story ID with the provided text.
+ */
+app.post('/api/admin/post-tweet', async (req, res) => {
+  const { storyId, tweetText } = req.body;
+
+  if (!storyId || !tweetText) {
+    return res.status(400).json({ error: 'Story ID and tweet text are required.' });
+  }
+
+  try {
+    // 1. Fetch the story details from Supabase
+    const { data: story, error: fetchError } = await supabase
+      .from('latest_news')
+      .select('id, ai_image_url')
+      .eq('id', storyId)
+      .single();
+
+    if (fetchError) throw fetchError;
+    if (!story) {
+      return res.status(404).json({ error: 'Story not found.' });
+    }
+
+    // 2. Post to Twitter using the service
+    const result = await postSingleTweet(tweetText, story.ai_image_url);
+
+    if (!result.success) {
+      // Forward the error from the twitterService
+      return res.status(500).json({ error: 'Failed to post tweet.', details: result.error });
+    }
+
+    // 3. Update the story in Supabase to mark as posted
+    const { error: updateError } = await supabase
+      .from('latest_news')
+      .update({ is_posted_to_twitter: true })
+      .eq('id', storyId);
+
+    if (updateError) {
+      // This is a critical issue. The tweet went out but we couldn't mark it.
+      // Log this for manual intervention.
+      console.error(`CRITICAL: Tweet posted for story ${storyId} but failed to update 'is_posted_to_twitter' flag.`, updateError);
+      // Inform the client, but the tweet was successful.
+      return res.status(200).json({ 
+        message: 'Tweet posted successfully, but failed to update the story status in the database. Please check logs.',
+        tweet: result.tweet 
+      });
+    }
+
+    res.status(200).json({ message: 'Tweet posted successfully!', tweet: result.tweet });
+
+  } catch (error) {
+    console.error(`Error processing post-tweet request for story ${storyId}:`, error);
+    res.status(500).json({ error: 'Internal server error.', details: error.message });
+  }
+});
+
+
+// Helper function to post a single tweet based on a story object
+async function postTweet(story) {
+  if (!story || !story.id) {
+    console.log('postTweet helper received invalid story object. Skipping.');
+    return;
+  }
+
+  try {
+    console.log(`Generating tweet for story: ${story.title}`);
+    const hashtags = await generateHashtags(story.ai_summary);
+    // Construct the tweet text, ensuring it's within limits
+    // URL takes up 23 chars, leave space for hashtags and truncation.
+    const url = `https://www.microplastics-pulse.com/story/${story.id}`; // Assuming a future story page
+    const availableChars = 280 - url.length - hashtags.length - 4; // 4 for "..." and spaces
+    const truncatedSummary = story.ai_summary.length > availableChars 
+      ? story.ai_summary.substring(0, availableChars) + '...' 
+      : story.ai_summary;
+    
+    const tweetText = `${truncatedSummary}\n\n${hashtags}\n${url}`;
+
+    console.log(`Posting tweet: ${tweetText}`);
+    const result = await postSingleTweet(tweetText, story.ai_image_url);
+
+    if (result.success) {
+      console.log(`Tweet for story ${story.id} posted successfully. Updating database.`);
+      const { error: updateError } = await supabase
+        .from('latest_news')
+        .update({ is_posted_to_twitter: true })
+        .eq('id', story.id);
+      
+      if (updateError) {
+        console.error(`CRITICAL: Tweet posted for story ${story.id} but DB update failed!`, updateError);
+      }
+    } else {
+      console.error(`Failed to post tweet for story ${story.id}:`, result.error);
+    }
+  } catch (error) {
+    console.error(`An unexpected error occurred in postTweet for story ${story.id}:`, error);
+  }
+}
+
+// --- END Twitter Integration ---
 
 // --- Central Processing Logic ---
 /**
@@ -405,10 +558,10 @@ async function fetchArticlesFromGoogle(query, numResults = 10) {
 }
 
 /**
- * Generates a detailed summary using OpenAI.
- * @param {string} title The article title.
- * @param {string} snippet The article snippet/description.
- * @returns {Promise<string|null>} The generated summary or null on error.
+ * Generates a concise summary for a given title and snippet using OpenAI.
+ * @param {string} title The title of the article.
+ * @param {string} snippet The snippet/description of the article.
+ * @returns {Promise<string>} The AI-generated summary.
  */
 async function summarizeText(title, snippet) {
   if (!title || !snippet) return null;
@@ -431,7 +584,69 @@ async function summarizeText(title, snippet) {
   }
 }
 
-// --- Server Start ---
+/**
+ * Generates relevant hashtags for a given text using OpenAI.
+ * @param {string} summary The text summary of the article.
+ * @returns {Promise<string>} A string of 2-3 relevant hashtags.
+ */
+async function generateHashtags(summary) {
+  if (!summary) return '#microplastics';
+
+  try {
+    const prompt = `Based on the following summary, generate exactly 2 relevant and specific Twitter hashtags. Do not include the #microplastics hashtag, it will be added automatically. The hashtags should be concise and directly related to the key topics. Format them as a single string with spaces, like "#topicone #topictwo".\n\nSummary: "${summary}"`;
+
+    const response = await openai.chat.completions.create({
+      model: "gpt-3.5-turbo",
+      messages: [{ role: "user", content: prompt }],
+      max_tokens: 20,
+      temperature: 0.5,
+      n: 1,
+    });
+
+    const generatedText = response.choices[0].message.content.trim();
+    // Clean up the text to ensure it's just hashtags
+    const cleanedHashtags = generatedText.split(' ').filter(tag => tag.startsWith('#')).join(' ');
+
+    return `#microplastics ${cleanedHashtags}`.trim();
+  } catch (error) {
+    console.error('Error generating hashtags with OpenAI:', error);
+    return '#microplastics'; // Fallback
+  }
+}
+
+// --- Scheduled Tasks ---
+// Cron job to run the tweet posting logic 3 times a day.
+// Currently disabled. Will be enabled when the feature is ready for automation.
+/*
+cron.schedule('0 9,15,21 * * *', async () => {
+  console.log('--- Running Scheduled Tweet Job ---');
+  try {
+    // Fetch the next story to post (e.g., the oldest one)
+     const { data: story, error } = await supabase
+      .from('latest_news')
+      .select('*')
+      .eq('is_posted_to_twitter', false)
+      .order('published_date', { ascending: true })
+      .limit(1)
+      .single();
+
+    if (error) throw error;
+
+    if (story) {
+      await postTweet(story);
+    } else {
+      console.log('No new stories to tweet.');
+    }
+  } catch (error) {
+    console.error('Error in scheduled tweet job:', error);
+  }
+}, {
+  scheduled: true,
+  timezone: "UTC"
+});
+*/
+
+// --- Server Initialization ---
 app.listen(port, () => {
   console.log(`Backend server listening on port ${port}`);
 });
