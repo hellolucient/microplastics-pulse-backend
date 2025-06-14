@@ -10,6 +10,9 @@
   "author": "",
   "license": "ISC",
   "description": "",
+  "engines": {
+    "node": "20.x"
+  },
   "dependencies": {
     "@supabase/supabase-js": "^2.49.4",
     "@vercel/blob": "^1.0.1",
