@@ -1,4 +1,3 @@
-console.log('twitter-api-v2 version:', require('twitter-api-v2/package.json').version);
 require('dotenv').config({ path: require('path').resolve(__dirname, '../.env') }); 
 const express = require('express');
 const cors = require('cors');
