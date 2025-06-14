@@ -168,10 +168,10 @@ async function generateHashtags(summary) {
 }
 
 async function generateTweetPreview(story) {
-  if (!story || !story.url || !story.ai_summary) return "Could not generate tweet preview.";
+  if (!story || !story.id || !story.ai_summary) return "Could not generate tweet preview.";
   const compellingSummary = await generateCompellingSummary(story.ai_summary);
   const hashtags = await generateHashtags(story.ai_summary);
-  const storyUrl = story.url;
+  const storyUrl = `https://microplastics-pulse.vercel.app/story/${story.id}`;
   const tco_url_length = 23;
   const fixedPartsLength = tco_url_length + hashtags.length + 2;
   const availableCharsForSummary = 280 - fixedPartsLength;
@@ -383,6 +383,31 @@ app.get('/api/latest-news', async (req, res) => {
       res.status(200).json(data || []);
   } catch (error) {
       res.status(500).json({ error: 'Failed to fetch latest news.' });
+  }
+});
+
+app.get('/api/story/:id', async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database service is unavailable' });
+  const { id } = req.params;
+  try {
+    const { data, error } = await supabase
+      .from('latest_news')
+      .select('*')
+      .eq('id', id)
+      .single();
+    if (error) {
+      if (error.code === 'PGRST116') { // PostgREST error for "Not a single row was returned"
+        return res.status(404).json({ error: 'Story not found' });
+      }
+      throw error;
+    }
+    if (!data) {
+      return res.status(404).json({ error: 'Story not found' });
+    }
+    res.status(200).json(data);
+  } catch (error) {
+    console.error(`Error fetching story with id ${id}:`, error.message);
+    res.status(500).json({ error: 'Internal Server Error', details: error.message });
   }
 });
 
