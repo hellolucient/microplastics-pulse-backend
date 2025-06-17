@@ -320,12 +320,6 @@ async function processEmail(emailData, urlProcessor) {
 
         const extractedUrl = urlsFound[0];
 
-        // NEW: Add a check to specifically skip Google share links
-        if (extractedUrl.includes('share.google')) {
-            console.log(`[GmailProcessor] Skipped: URL is a Google redirect link (${extractedUrl}).`);
-            return { success: true, skipped: true };
-        }
-
         // This is the key change: Call the function directly instead of using axios.
         if (typeof urlProcessor !== 'function') {
              console.error('[GmailProcessor] CRITICAL: urlProcessor is not a function. Cannot process URL.');

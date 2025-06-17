@@ -216,15 +216,21 @@ async function processQueryAndSave(query) {
 /**
  * NEW, ROBUST, HELPER: Fetches article details using Cheerio for better parsing.
  * @param {string} url The URL to scrape.
- * @returns {Promise<{title: string|null, snippet: string|null}>}
+ * @returns {Promise<{title: string|null, snippet: string|null, finalUrl: string|null}>}
  */
 async function fetchArticleDetails(url) {
+    console.log(`[fetchArticleDetails] Fetching details for: ${url}`);
     try {
-        const { data: html } = await axios.get(url, {
+        const response = await axios.get(url, {
+            timeout: 20000, // 20-second timeout
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
             }
         });
+
+        const finalUrl = response.request.res.responseUrl || url;
+        console.log(`[fetchArticleDetails] Successfully fetched. Final URL: ${finalUrl}`);
+        const html = response.data;
 
         const $ = cheerio.load(html);
 
@@ -253,11 +259,15 @@ async function fetchArticleDetails(url) {
         const cleanedTitle = title ? he.decode(title.trim()) : 'Title not found';
         const cleanedSnippet = snippet ? he.decode(snippet.trim()) : 'Snippet not found';
 
-        return { title: cleanedTitle, snippet: cleanedSnippet };
+        return { title: cleanedTitle, snippet: cleanedSnippet, finalUrl };
 
     } catch (error) {
         console.error(`Error fetching article details for ${url}:`, error.message);
-        return { title: null, snippet: 'Could not fetch content. The source may be dynamic or protected.' };
+        if (axios.isAxiosError(error) && error.code === 'ECONNABORTED') {
+            console.error(`[fetchArticleDetails] Request timed out for ${url}`);
+            return { title: null, snippet: 'Could not fetch content. The request timed out.', finalUrl: url };
+        }
+        return { title: null, snippet: 'Could not fetch content. The source may be dynamic or protected.', finalUrl: url };
     }
 }
 
@@ -277,19 +287,23 @@ async function processSubmittedUrl(articleUrl) {
     }
 
     try {
-        const { data: existing } = await supabase.from('latest_news').select('url').eq('url', articleUrl).maybeSingle();
+        const { title, snippet, finalUrl } = await fetchArticleDetails(articleUrl);
+        const urlToProcess = finalUrl || articleUrl;
+
+        const { data: existing } = await supabase.from('latest_news').select('url').eq('url', urlToProcess).maybeSingle();
         if (existing) {
             return { success: true, message: 'URL already exists.', status: 200 }; // Not an error, just already done.
         }
-
-        const { title, snippet } = await fetchArticleDetails(articleUrl);
         
+        if (snippet && snippet.includes('timed out')) {
+            return { success: false, message: 'Failed to fetch content from the source URL (timeout).', status: 504 };
+        }
         if (snippet === 'Could not fetch content. The source may be dynamic or protected.') {
             return { success: false, message: 'Failed to fetch content from the source URL.', status: 502 };
         }
 
         let summary = null;
-        const isXUrl = articleUrl.includes('x.com') || articleUrl.includes('twitter.com');
+        const isXUrl = urlToProcess.includes('x.com') || urlToProcess.includes('twitter.com');
         if (isXUrl && snippet) {
             summary = snippet;
         } else if (openai && title && snippet) {
@@ -298,12 +312,12 @@ async function processSubmittedUrl(articleUrl) {
 
         let imageUrl = null;
         if (openai && title) {
-            imageUrl = await generateAndStoreImage(title, articleUrl);
+            imageUrl = await generateAndStoreImage(title, urlToProcess);
         }
 
-        const sourceHostname = new URL(articleUrl).hostname;
+        const sourceHostname = new URL(urlToProcess).hostname;
         const newItem = {
-            url: articleUrl,
+            url: urlToProcess,
             title: title || 'Title not available',
             ai_summary: summary,
             ai_image_url: imageUrl,
