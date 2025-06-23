@@ -692,13 +692,13 @@ app.post('/api/submit-article-url', async (req, res) => {
     res.status(result.status || 500).json(result);
 });
 
-// Export the Express API for Vercel
 module.exports = app;
 
-// For local direct testing
+// --- Start Server for Persistent Environments (like Railway) ---
+// This block allows the app to be run as a standalone server
 if (require.main === module) {
-  const localPort = process.env.PORT || 3001;
-  app.listen(localPort, () => {
-    console.log(`Backend server listening directly on http://localhost:${localPort}`);
+  const PORT = process.env.PORT || 3001;
+  app.listen(PORT, () => {
+    console.log(`Server listening on port ${PORT}`);
   });
 }
