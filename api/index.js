@@ -637,16 +637,18 @@ app.post('/api/admin/start-email-check', (req, res) => {
         return res.status(500).json({ message: 'Email processing script not available. Backend issue.' });
     }
 
-    // Start the process but don't wait for it to finish
-    gmailProcessorMain(processSubmittedUrl).then(processingResult => {
-        // This will run after the process is complete. We can log it on the server.
-        console.log('[Asynchronous Email Check] Processing complete.', processingResult);
-    }).catch(error => {
-        console.error('[Asynchronous Email Check] An error occurred during the background process.', error);
-    });
-
     // Immediately respond to the client
-    res.status(202).json({ message: 'Email processing started in the background. Check server logs for progress.' });
+    res.status(202).json({ message: 'Email processing job started. Check server logs for progress.' });
+
+    // On the next tick of the event loop, start the actual processing.
+    // This ensures the response is sent before the heavy work begins.
+    setTimeout(() => {
+        gmailProcessorMain(processSubmittedUrl).then(processingResult => {
+            console.log('[Asynchronous Email Check] Processing complete.', processingResult);
+        }).catch(error => {
+            console.error('[Asynchronous Email Check] An error occurred during the background process.', error);
+        });
+    }, 0);
 });
 
 /**
