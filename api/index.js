@@ -632,6 +632,23 @@ app.get('/api/admin/check-submitted-emails', async (req, res) => {
     }
 });
 
+app.post('/api/admin/start-email-check', (req, res) => {
+    if (!gmailProcessorMain) {
+        return res.status(500).json({ message: 'Email processing script not available. Backend issue.' });
+    }
+
+    // Start the process but don't wait for it to finish
+    gmailProcessorMain(processSubmittedUrl).then(processingResult => {
+        // This will run after the process is complete. We can log it on the server.
+        console.log('[Asynchronous Email Check] Processing complete.', processingResult);
+    }).catch(error => {
+        console.error('[Asynchronous Email Check] An error occurred during the background process.', error);
+    });
+
+    // Immediately respond to the client
+    res.status(202).json({ message: 'Email processing started in the background. Check server logs for progress.' });
+});
+
 /**
  * Temporary endpoint to reset the email checker's state in Supabase.
  * Deletes the 'last_email_check_uid' and 'last_email_check_timestamp' keys.

@@ -220,25 +220,13 @@ async function searchEmails(imap) {
                     reject({ emailsData: [], newestEmailUid: null, error: searchErr });
                     return;
                 }
-                console.log(`Found ${results.length} email(s).`);
+                console.log(`Found ${results.length} email(s) to process.`);
                 if (results.length === 0) {
                     resolve({ emailsData: [], newestEmailUid: null });
                     return;
                 }
 
-                // --- Batching Logic ---
-                const BATCH_SIZE = 10;
-                const batchResults = results.slice(0, BATCH_SIZE);
-                console.log(`[GmailProcessor] Processing a batch of ${batchResults.length} of ${results.length} total found emails.`);
-                // --- End Batching Logic ---
-
-                if (batchResults.length === 0) {
-                    // This can happen if results has items but slice is empty, though unlikely.
-                    resolve({ emailsData: [], newestEmailUid: null });
-                    return;
-                }
-
-                const f = imap.fetch(batchResults, { bodies: '', markSeen: false }); // Fetch the limited batch
+                const f = imap.fetch(results, { bodies: '', markSeen: false }); // Fetch all results
                 const emailsData = [];
                 let currentBatchLatestUid = null;
 
