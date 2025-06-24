@@ -325,7 +325,7 @@ async function processEmail(emailData, urlProcessor) {
             console.error(`[GmailProcessor] Failed to process URL ${extractedUrl}. Status: ${result.status}, Message: ${result.message}`);
             // If the processor determined it was a server-side issue (5xx), we can consider it a failed URL for retry.
             if (result.status && result.status >= 500) {
-                return { success: false, failedUrl: extractedUrl };
+                return { success: false, failedUrl: extractedUrl, reason: `Status: ${result.status}, Message: ${result.message}` };
             }
             // For other errors (e.g., 4xx), we treat it as processed so we don't get stuck.
             return { success: true, skipped: true };
@@ -339,7 +339,7 @@ async function processEmail(emailData, urlProcessor) {
 
 async function main(urlProcessor) {
     console.log('[GmailProcessor] Starting email processing script...');
-    const failedUrls = [];
+    const failedEntries = [];
     let processingStatus = {
         processedCount: 0,
         failedCount: 0,
@@ -367,7 +367,7 @@ async function main(urlProcessor) {
                 if (result.success && !result.skipped) {
                     processingStatus.processedCount++;
                 } else if (!result.success && result.failedUrl) {
-                    failedUrls.push(result.failedUrl);
+                    failedEntries.push({ url: result.failedUrl, reason: result.reason });
                     processingStatus.failedCount++;
                 }
             }
@@ -378,9 +378,29 @@ async function main(urlProcessor) {
             processingStatus.message = '[GmailProcessor] No new emails to process.';
         }
 
-        processingStatus.failedUrls = failedUrls;
-        if (failedUrls.length > 0) {
-            processingStatus.message += ` ${failedUrls.length} URL(s) failed.`;
+        processingStatus.failedUrls = failedEntries.map(e => e.url);
+        if (failedEntries.length > 0) {
+            processingStatus.message += ` ${failedEntries.length} URL(s) failed.`;
+            if (supabase) {
+                const newFailedUrls = failedEntries.map(entry => ({
+                    url: entry.url,
+                    reason: entry.reason,
+                    created_at: new Date().toISOString()
+                }));
+                try {
+                    const { error: insertError } = await supabase
+                        .from('failed_urls')
+                        .insert(newFailedUrls, { returning: 'minimal' });
+
+                    if (insertError) {
+                        console.error('[GmailProcessor] Error saving failed URLs to Supabase:', insertError.message);
+                    } else {
+                        console.log(`[GmailProcessor] Successfully saved ${failedEntries.length} failed URL(s) to the database.`);
+                    }
+                } catch (e) {
+                    console.error('[GmailProcessor] Exception saving failed URLs:', e.message);
+                }
+            }
         }
 
     } catch (error) {
@@ -388,7 +408,7 @@ async function main(urlProcessor) {
         const errorMsg = 'An error occurred in the Gmail processing main process.';
         console.error(errorMsg, error);
         processingStatus.message = `${errorMsg} Details: ${error.message}`;
-        processingStatus.failedUrls = failedUrls; 
+        processingStatus.failedUrls = failedEntries.map(e => e.url); 
     } finally {
         if (scriptError) {
             console.log("[GmailProcessor] Script finished with errors. UID will not be updated.");

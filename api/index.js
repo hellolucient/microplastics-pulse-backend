@@ -696,6 +696,32 @@ app.get('/api/admin/reset-email-checker', async (req, res) => {
     }
 });
 
+// --- New Endpoint for Failed URLs ---
+app.get('/api/admin/failed-urls', async (req, res) => {
+    if (!supabase) {
+        return res.status(503).json({ error: 'Database client not available.' });
+    }
+    try {
+        const { data, error } = await supabase
+            .from('failed_urls')
+            .select('*')
+            .order('created_at', { ascending: false })
+            .limit(100);
+
+        if (error) {
+            console.error('[API] Error fetching failed URLs:', error.message);
+            return res.status(500).json({ error: 'Database error fetching failed URLs.', details: error.message });
+        }
+
+        res.status(200).json(data || []);
+
+    } catch (error) {
+        console.error('[API] Critical error in /api/admin/failed-urls:', error);
+        res.status(500).json({ error: 'An unexpected server error occurred.', details: error.message });
+    }
+});
+// --- End of New Endpoint ---
+
 // --- End of Correct Email Checking Logic ---
 
 // Other endpoints from the original file...
