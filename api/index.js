@@ -219,32 +219,94 @@ async function generateTweetPreview(story) {
 
 async function processQueryAndSave(query) {
     if (!supabase) return { status: 'db_error', count: 0 };
+    console.log(`[processQueryAndSave] Starting query: "${query}"`);
+
     const googleResponse = await fetchArticlesFromGoogle(query, 10);
     if (!googleResponse.success) {
         if (googleResponse.error?.status === 429) return { status: 'quota_error', count: 0 };
         if (googleResponse.error?.status === 'TIMEOUT') return { status: 'google_timeout_error', count: 0 };
         return { status: 'google_api_error', count: 0 };
     }
+
     const articles = googleResponse.articles;
-    if (!articles || articles.length === 0) return { status: 'success', count: 0 };
+    if (!articles || articles.length === 0) {
+        console.log(`[LOG] Google returned 0 results for query: "${query}"`);
+        return { status: 'success', count: 0 };
+    }
+    console.log(`[processQueryAndSave] Google returned ${articles.length} results for query.`);
+
     const { data: existingUrlsData, error: urlFetchError } = await supabase.from('latest_news').select('url');
-    if (urlFetchError) return { status: 'db_error', count: 0 };
+    if (urlFetchError) {
+        console.error('[processQueryAndSave] DB error fetching existing URLs:', urlFetchError.message);
+        return { status: 'db_error', count: 0 };
+    }
     const existingUrls = new Set(existingUrlsData.map(item => item.url));
+    console.log(`[processQueryAndSave] Found ${existingUrls.size} existing URLs in the database.`);
+
     let newArticlesAdded = 0;
     for (const article of articles) {
-        const { title, link: url, snippet } = article;
-        if (!url || !title || !url.startsWith('http') || existingUrls.has(url)) continue;
-        const ai_summary = await summarizeText(title, snippet);
-        const ai_image_url = await generateAndStoreImage(title, url);
-        let sourceHostname;
-        try { sourceHostname = new URL(url).hostname; } catch (e) { continue; }
-        const newItem = { url, title, ai_summary, ai_image_url, source: sourceHostname, processed_at: new Date().toISOString() };
-        const { error: insertError } = await supabase.from('latest_news').insert(newItem);
-        if (!insertError) {
-            newArticlesAdded++;
-            existingUrls.add(url);
+        const { title, link: googleUrl, snippet } = article;
+
+        if (!googleUrl || !googleUrl.startsWith('http')) {
+            console.warn(`[LOG] Skipping invalid URL from Google: ${googleUrl}`);
+            continue;
+        }
+
+        if (existingUrls.has(googleUrl)) {
+            console.log(`[LOG] Skipping (already exists by Google URL): ${googleUrl}`);
+            continue; 
+        }
+
+        let finalUrl = googleUrl;
+        try {
+            const response = await axios.head(googleUrl, { timeout: 15000, maxRedirects: 5 });
+            finalUrl = response.request.res.responseUrl || googleUrl;
+            console.log(`[LOG] Resolved URL: ${googleUrl} -> ${finalUrl}`);
+        } catch (headError) {
+            console.warn(`[LOG] HEAD request failed for ${googleUrl}. Using original URL. Error: ${headError.message}`);
+        }
+
+        if (existingUrls.has(finalUrl)) {
+            console.log(`[LOG] Skipping (already exists by final URL): ${finalUrl}`);
+            continue;
+        }
+
+        console.log(`[LOG] PROCESSING NEW ARTICLE: "${title}" (${finalUrl})`);
+
+        try {
+            const summary = await summarizeText(title, snippet);
+            const imageUrl = await generateAndStoreImage(title, finalUrl);
+            const sourceHostname = new URL(finalUrl).hostname;
+
+            const newItem = {
+                url: finalUrl,
+                title: title || 'Title not available',
+                ai_summary: summary,
+                ai_image_url: imageUrl,
+                source: sourceHostname,
+                processed_at: new Date().toISOString()
+            };
+
+            const { error: insertError } = await supabase.from('latest_news').insert(newItem);
+
+            if (insertError) {
+                if (insertError.code === '23505') {
+                    console.warn(`[processQueryAndSave] URL already exists (race condition): ${finalUrl}`);
+                } else {
+                    throw insertError;
+                }
+            } else {
+                console.log(`[LOG] Successfully ADDED to DB: ${finalUrl}`);
+                newArticlesAdded++;
+                existingUrls.add(googleUrl); // Add both to prevent re-checking
+                existingUrls.add(finalUrl);
+            }
+        } catch (error) {
+            console.error(`[LOG] Error processing article "${title}" (${finalUrl}):`, error.message);
         }
     }
+    
+    console.log(`[processQueryAndSave] Finished query "${query}". Added ${newArticlesAdded} new articles.`);
     return { status: 'success', count: newArticlesAdded };
 }
 
@@ -403,24 +465,25 @@ app.post('/api/add-news', async (req, res) => {
     }
 });
 
+const SEARCH_QUERIES = [
+    "latest research microplastics human health site:nature.com OR site:sciencedirect.com", "global microplastic pollution report 2025 site:who.int OR site:unep.org",
+    "microplastics ubiquity environment food chain site:nature.com", "emerging health concerns microplastics 2025 site:thelancet.com OR site:nih.gov",
+    "policy innovation to prevent microplastic contamination 2025", "how microplastics enter the human body ingestion inhalation dermal site:ncbi.nlm.nih.gov",
+    "bioaccumulation of microplastics in human organs site:sciencedirect.com", "crossing blood brain barrier microplastics placenta gut brain site:nature.com",
+    "translocation of microplastics to brain or placenta site:cell.com", "microplastics inflammation oxidative stress endocrine disruption site:ncbi.nlm.nih.gov",
+    "microplastics gut microbiome dysbiosis immunity site:gut.bmj.com OR site:nature.com", "microplastics reproductive health fetal exposure site:thelancet.com",
+    "microplastics impact on brain neurological disorders site:sciencedirect.com", "microplastics and chronic disease cancer diabetes cardiovascular site:who.int",
+    "microplastics linked to erectile dysfunction antibiotic resistance superbugs", "food contamination microplastics seafood produce packaging site:efsa.europa.eu",
+    "airborne microplastics indoor exposure site:epa.gov OR site:pubmed.ncbi.nlm.nih.gov", "textiles cosmetics furniture microplastic emissions site:echa.europa.eu",
+    "wellness industry microplastics awareness detox contradictions site:gwi.org", "clean living vs microplastic reality wellness narrative site:mindbodygreen.com OR site:wellandgood.com",
+    "microplastics detox evidence probiotics antioxidants site:ncbi.nlm.nih.gov", "individual microplastic exposure reduction tips 2025 site:cdc.gov OR site:who.int",
+    "new technologies microplastic removal blood purification 2025", "probiotic and antioxidant strategies microplastic detox site:sciencedirect.com",
+    "wellness program standards to reduce microplastic exposure site:spaindustry.org", "2025 microplastic research priorities wellness industry site:gwi.org OR site:nih.gov",
+    "call to action microplastics wellness sustainability site:globalwellnesssummit.com", "research gaps in microplastic and human health site:thelancet.com OR site:who.int"
+];
+
 app.get('/api/search-queries', (req, res) => {
-  const searchQueries = [
-      "latest research microplastics human health site:nature.com OR site:sciencedirect.com", "global microplastic pollution report 2025 site:who.int OR site:unep.org",
-      "microplastics ubiquity environment food chain site:nature.com", "emerging health concerns microplastics 2025 site:thelancet.com OR site:nih.gov",
-      "policy innovation to prevent microplastic contamination 2025", "how microplastics enter the human body ingestion inhalation dermal site:ncbi.nlm.nih.gov",
-      "bioaccumulation of microplastics in human organs site:sciencedirect.com", "crossing blood brain barrier microplastics placenta gut brain site:nature.com",
-      "translocation of microplastics to brain or placenta site:cell.com", "microplastics inflammation oxidative stress endocrine disruption site:ncbi.nlm.nih.gov",
-      "microplastics gut microbiome dysbiosis immunity site:gut.bmj.com OR site:nature.com", "microplastics reproductive health fetal exposure site:thelancet.com",
-      "microplastics impact on brain neurological disorders site:sciencedirect.com", "microplastics and chronic disease cancer diabetes cardiovascular site:who.int",
-      "microplastics linked to erectile dysfunction antibiotic resistance superbugs", "food contamination microplastics seafood produce packaging site:efsa.europa.eu",
-      "airborne microplastics indoor exposure site:epa.gov OR site:pubmed.ncbi.nlm.nih.gov", "textiles cosmetics furniture microplastic emissions site:echa.europa.eu",
-      "wellness industry microplastics awareness detox contradictions site:gwi.org", "clean living vs microplastic reality wellness narrative site:mindbodygreen.com OR site:wellandgood.com",
-      "microplastics detox evidence probiotics antioxidants site:ncbi.nlm.nih.gov", "individual microplastic exposure reduction tips 2025 site:cdc.gov OR site:who.int",
-      "new technologies microplastic removal blood purification 2025", "probiotic and antioxidant strategies microplastic detox site:sciencedirect.com",
-      "wellness program standards to reduce microplastic exposure site:spaindustry.org", "2025 microplastic research priorities wellness industry site:gwi.org OR site:nih.gov",
-      "call to action microplastics wellness sustainability site:globalwellnesssummit.com", "research gaps in microplastic and human health site:thelancet.com OR site:who.int"
-  ];
-  res.status(200).json({ queries: searchQueries });
+  res.status(200).json({ queries: SEARCH_QUERIES });
 });
 
 app.get('/api/latest-news', async (req, res) => {
@@ -506,38 +569,22 @@ app.post('/api/admin/post-tweet', async (req, res) => {
 });
 
 app.all('/api/trigger-fetch', async (req, res) => {
-  const searchQueries = [
-      "latest research microplastics human health site:nature.com OR site:sciencedirect.com", "global microplastic pollution report 2025 site:who.int OR site:unep.org",
-      "microplastics ubiquity environment food chain site:nature.com", "emerging health concerns microplastics 2025 site:thelancet.com OR site:nih.gov",
-      "policy innovation to prevent microplastic contamination 2025", "how microplastics enter the human body ingestion inhalation dermal site:ncbi.nlm.nih.gov",
-      "bioaccumulation of microplastics in human organs site:sciencedirect.com", "crossing blood brain barrier microplastics placenta gut brain site:nature.com",
-      "translocation of microplastics to brain or placenta site:cell.com", "microplastics inflammation oxidative stress endocrine disruption site:ncbi.nlm.nih.gov",
-      "microplastics gut microbiome dysbiosis immunity site:gut.bmj.com OR site:nature.com", "microplastics reproductive health fetal exposure site:thelancet.com",
-      "microplastics impact on brain neurological disorders site:sciencedirect.com", "microplastics and chronic disease cancer diabetes cardiovascular site:who.int",
-      "microplastics linked to erectile dysfunction antibiotic resistance superbugs", "food contamination microplastics seafood produce packaging site:efsa.europa.eu",
-      "airborne microplastics indoor exposure site:epa.gov OR site:pubmed.ncbi.nlm.nih.gov", "textiles cosmetics furniture microplastic emissions site:echa.europa.eu",
-      "wellness industry microplastics awareness detox contradictions site:gwi.org", "clean living vs microplastic reality wellness narrative site:mindbodygreen.com OR site:wellandgood.com",
-      "microplastics detox evidence probiotics antioxidants site:ncbi.nlm.nih.gov", "individual microplastic exposure reduction tips 2025 site:cdc.gov OR site:who.int",
-      "new technologies microplastic removal blood purification 2025", "probiotic and antioxidant strategies microplastic detox site:sciencedirect.com",
-      "wellness program standards to reduce microplastic exposure site:spaindustry.org", "2025 microplastic research priorities wellness industry site:gwi.org OR site:nih.gov",
-      "call to action microplastics wellness sustainability site:globalwellnesssummit.com", "research gaps in microplastic and human health site:thelancet.com OR site:who.int"
-  ];
   if (req.method === 'GET') {
     let totalAddedByCron = 0;
-    for (const query of searchQueries) {
+    for (const query of SEARCH_QUERIES) {
       const result = await processQueryAndSave(query);
       if (result.status === 'success') totalAddedByCron += result.count;
     }
     return res.status(200).json({ message: 'Cron fetch cycle completed.', totalAdded: totalAddedByCron });
   } else if (req.method === 'POST') {
     let { queryIndex } = req.body;
-    if (typeof queryIndex !== 'number' || queryIndex < 0 || queryIndex >= searchQueries.length) {
+    if (typeof queryIndex !== 'number' || queryIndex < 0 || queryIndex >= SEARCH_QUERIES.length) {
       return res.status(400).json({ error: 'Invalid queryIndex provided.' });
     }
-    const result = await processQueryAndSave(searchQueries[queryIndex]);
+    const result = await processQueryAndSave(SEARCH_QUERIES[queryIndex]);
     if (result.status === 'success') {
-      const nextIndex = (queryIndex + 1 < searchQueries.length) ? queryIndex + 1 : null;
-      return res.status(200).json({ message: `Query ${queryIndex + 1}/${searchQueries.length} processed.`, addedCount: result.count, nextIndex: nextIndex });
+      const nextIndex = (queryIndex + 1 < SEARCH_QUERIES.length) ? queryIndex + 1 : null;
+      return res.status(200).json({ message: `Query ${queryIndex + 1}/${SEARCH_QUERIES.length} processed.`, addedCount: result.count, nextIndex: nextIndex });
     } else {
       return res.status(500).json({ error: 'Failed to process query.', details: result.error });
     }
