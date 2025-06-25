@@ -138,24 +138,52 @@ async function generateAndStoreImage(title, articleUrl) {
     }
 }
 
-async function generateCompellingSummary(summary) {
-  if (!summary || !openai) return (summary || '').substring(0, 150) + '...';
-  const prompt = `You are a social media manager for an environmental news organization. Based on the following article summary, write a compelling and concise tweet. The tweet should be engaging and written in a professional but urgent tone. Do not include hashtags or a URL. The output should be the tweet text only.\n\nSummary: "${summary}"`;
+async function generateTweetTextFromSummary(summary, maxLength) {
+  if (!summary || !openai) {
+      const truncated = summary.substring(0, maxLength - 3);
+      const lastSpace = truncated.lastIndexOf(' ');
+      return lastSpace > 0 ? truncated.substring(0, lastSpace) + '...' : truncated + '...';
+  }
+
+  const prompt = `You are a social media manager for an environmental news organization. Your task is to create a compelling tweet from the provided article summary.
+
+Guidelines:
+- The tone must be professional but urgent and engaging to encourage clicks.
+- Extract the most eye-catching facts or statements from the summary.
+- The final output MUST be a single block of text for the tweet body.
+- CRITICALLY: Your entire response must NOT exceed ${maxLength} characters.
+- Do NOT include any hashtags or URLs in your response.
+
+Article Summary: "${summary}"`;
+
   try {
     const response = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo", messages: [{ role: "user", content: prompt }], max_tokens: 80, temperature: 0.7, n: 1,
+      model: "gpt-4o-mini", // Using a more capable model for this nuanced task
+      messages: [{ role: "user", content: prompt }],
+      max_tokens: 100, // Roughly corresponds to ~400 chars, which is more than enough.
+      temperature: 0.7,
+      n: 1,
     });
+    // We don't need to truncate here because we've asked the model to respect the length.
     return response.choices[0].message.content.trim().replace(/^"|"$/g, '');
   } catch (error) {
-    console.error('Error generating compelling summary with OpenAI:', error);
-    return summary.substring(0, 150) + '...';
+    console.error('Error generating tweet text with OpenAI:', error);
+    // Fallback to simple truncation if API fails
+    const truncated = summary.substring(0, maxLength - 3);
+    const lastSpace = truncated.lastIndexOf(' ');
+    return lastSpace > 0 ? truncated.substring(0, lastSpace) + '...' : truncated + '...';
   }
 }
 
 async function generateHashtags(summary) {
   if (!summary || !openai) return '#microplastics';
   try {
-    const prompt = `Based on the following summary, generate exactly 2 relevant and specific Twitter hashtags. Do not include the #microplastics hashtag, it will be added automatically. The hashtags should be concise and directly related to the key topics. Format them as a single string with spaces, like "#topicone #topictwo".\n\nSummary: "${summary}"`;
+    const prompt = `Based on the following summary, generate 2-3 relevant and specific Twitter hashtags.
+- Do NOT include the #microplastics hashtag, it will be added automatically.
+- The hashtags should be concise and directly related to the key topics.
+- Format them as a single string with spaces, like "#topicone #topictwo".
+
+Summary: "${summary}"`;
     const response = await openai.chat.completions.create({
       model: "gpt-3.5-turbo", messages: [{ role: "user", content: prompt }], max_tokens: 20, temperature: 0.5, n: 1,
     });
@@ -169,17 +197,24 @@ async function generateHashtags(summary) {
 
 async function generateTweetPreview(story) {
   if (!story || !story.id || !story.ai_summary) return "Could not generate tweet preview.";
-  const compellingSummary = await generateCompellingSummary(story.ai_summary);
+
+  // 1. Generate hashtags and define URL first to know their length.
   const hashtags = await generateHashtags(story.ai_summary);
-  const storyUrl = `https://microplastics-pulse.vercel.app/story/${story.id}`;
-  const tco_url_length = 23;
-  const fixedPartsLength = tco_url_length + hashtags.length + 2;
-  const availableCharsForSummary = 280 - fixedPartsLength;
-  let finalSummary = compellingSummary;
-  if (finalSummary.length > availableCharsForSummary) {
-    finalSummary = finalSummary.substring(0, availableCharsForSummary - 3) + '...';
-  }
-  return `${finalSummary}\n\n${hashtags}\n${storyUrl}`;
+  const storyUrl = `https://www.microplasticswatch.com/story/${story.id}`;
+  
+  // 2. Define constants for Twitter's character limits
+  const TWEET_LIMIT = 280;
+  const TCO_URL_LENGTH = 23;
+
+  // 3. Calculate the maximum length available for the tweet's main text.
+  const fixedPartsLength = TCO_URL_LENGTH + hashtags.length + 2; // +2 for spaces
+  const maxTextLength = TWEET_LIMIT - fixedPartsLength;
+
+  // 4. Generate the tweet's main text using the summary and calculated max length.
+  const tweetText = await generateTweetTextFromSummary(story.ai_summary, maxTextLength);
+  
+  // 5. Assemble the final tweet text. No more truncation needed here.
+  return `${tweetText} ${hashtags} ${storyUrl}`;
 }
 
 async function processQueryAndSave(query) {
