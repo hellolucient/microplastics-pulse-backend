@@ -6,14 +6,17 @@ const he = require('he');
 const nodemailer = require('nodemailer');
 const cron = require('node-cron');
 const { postSingleTweet } = require('../lib/twitterService');
-const { runScheduledTasks } = require('../lib/automation');
+const { runScheduledTasks, runEmailCheck } = require('../lib/automation');
 const {
   supabase,
   processQueryAndSave,
   generateTweetPreview,
   SEARCH_QUERIES,
   fetchArticleDetails,
-  processSubmittedUrl
+  processSubmittedUrl,
+  fetchArticlesFromGoogle,
+  summarizeText,
+  generateAndStoreImage
 } = require('../lib/coreLogic');
 
 const app = express();
@@ -270,6 +273,21 @@ app.post('/api/regenerate-image', async (req, res) => {
     return res.status(200).json({ message: `Image regenerated successfully for story ID: ${article_id}.`, new_ai_image_url });
   } catch (error) {
     return res.status(500).json({ error: 'Internal server error regenerating image.', details: error.message });
+  }
+});
+
+app.post('/api/admin/check-emails', async (req, res) => {
+  console.log("API: Received request to /api/admin/check-emails");
+  try {
+    const result = await runEmailCheck();
+    console.log("API: Email check completed, result:", result);
+    res.status(200).json(result);
+  } catch (error) {
+    console.error("API: Error during manual email check:", error);
+    res.status(500).json({ 
+      error: 'Failed to execute email check.', 
+      details: error.message 
+    });
   }
 });
 

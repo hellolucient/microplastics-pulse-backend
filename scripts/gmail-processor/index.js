@@ -196,7 +196,7 @@ async function defaultUrlProcessor(url, subject) {
       ai_image_url: imageUrl,
       source: sourceHostname,
       processed_at: new Date().toISOString(),
-      submitted_by: 'email', // Mark as submitted via email
+      // submitted_by: 'email', // This column doesn't exist in the schema
     };
 
     const { error: insertError } = await coreSupabase.from('latest_news').insert(newItem);
@@ -306,15 +306,19 @@ async function searchEmails(imap) {
                     reject({ emailsData: [], newestEmailUid: null, error: searchErr });
                     return;
                 }
-                console.log(`Found ${results.length} email(s) to process.`);
+                
+                console.log('[GmailProcessor] Raw search results:', results); // DEBUG LOGGING
+
+                const newestEmailUid = results.length > 0 ? Math.max(lastUid || 0, ...results) : lastUid;
+                console.log(`Found ${results.length} email(s) to process. Newest UID in batch will be ${newestEmailUid}.`);
+
                 if (results.length === 0) {
-                    resolve({ emailsData: [], newestEmailUid: null });
+                    resolve({ emailsData: [], newestEmailUid: lastUid });
                     return;
                 }
 
                 const f = imap.fetch(results, { bodies: '', markSeen: false }); // Fetch all results
                 const emailsData = [];
-                let currentBatchLatestUid = null;
 
                 f.on('message', (msg, seqno) => {
                     console.log(`Fetching message #${seqno}`);
@@ -325,15 +329,7 @@ async function searchEmails(imap) {
                             buffer += chunk.toString('utf8');
                         });
                     });
-                    msg.once('attributes', (attrs) => {
-                        // attrs.uid is the UID of the email
-                        if (attrs.uid) {
-                            // The UIDs might not be in order, so we find the max UID in the batch.
-                            if (currentBatchLatestUid === null || attrs.uid > currentBatchLatestUid) {
-                                currentBatchLatestUid = attrs.uid;
-                            }
-                        }
-                    });
+                    // No longer need to get UID from attributes here
                     msg.once('end', () => {
                         emailsData.push({ buffer }); 
                     });
@@ -341,13 +337,12 @@ async function searchEmails(imap) {
 
                 f.once('error', (fetchErr) => {
                     console.error('Fetch error:', fetchErr);
-                    reject({ emailsData: [], newestEmailUid: null, error: fetchErr });
+                    reject({ emailsData: [], newestEmailUid: lastUid, error: fetchErr });
                 });
 
                 f.once('end', () => {
                     console.log('Finished fetching all messages.');
-                    console.log(`Newest email UID in this batch: ${currentBatchLatestUid || 'N/A'}`);
-                    resolve({ emailsData, newestEmailUid: currentBatchLatestUid });
+                    resolve({ emailsData, newestEmailUid: newestEmailUid });
                 });
             });
         });
@@ -355,74 +350,113 @@ async function searchEmails(imap) {
 }
 
 async function processEmail(emailData, urlProcessor) {
-    if (!emailData || !emailData.text) {
-        console.log('[GmailProcessor] No text found in email body. Skipping.');
-        return;
+    // The buffer contains the raw email source.
+    if (!emailData || !emailData.buffer) {
+        console.log('[GmailProcessor] Email data or buffer is missing. Skipping.');
+        return { processed: [], failed: [] };
     }
+
+    const processed = [];
+    const failed = [];
 
     try {
-        const parsed = await simpleParser(emailData.body);
+        const parsed = await simpleParser(emailData.buffer);
         const bodyText = parsed.text || '';
-        const urls = bodyText.match(/https?:\/\/[^\s]+/g) || [];
+        const subject = parsed.subject || 'No Subject';
+        // A more robust regex to find URLs, including those wrapped in < >
+        const urls = bodyText.match(/https?:\/\/[^\s<>"']+/g) || [];
 
         if (urls.length === 0) {
-            console.log(`[GmailProcessor] No URL found in email from: ${emailData.from.value[0].address}`);
-            return;
+            console.log(`[GmailProcessor] No URL found in email with subject: "${subject}"`);
+            return { processed, failed };
         }
 
-        for (const extractedUrl of urls) {
-            console.log(`[GmailProcessor] Calling processor for URL: ${extractedUrl}`);
-            // Pass both the URL and the email subject to the processor function
-            const result = await urlProcessor(extractedUrl, parsed.subject);
-
-            // The logic for handling 'result' can be enhanced based on its structure
-            if (result && result.status === 'success') {
-                console.log(`[GmailProcessor] Successfully processed ${extractedUrl}`);
-            } else {
-                console.warn(`[GmailProcessor] Processing of ${extractedUrl} resulted in status: ${result ? result.status : 'unknown'}`);
-            }
+        // We only process the FIRST URL found in the email.
+        const firstUrl = urls[0];
+        console.log(`[GmailProcessor] Found URL: ${firstUrl} in email: "${subject}"`);
+        
+        const result = await urlProcessor(firstUrl, subject);
+        
+        if (result && result.status === 'success') {
+            console.log(`[GmailProcessor] Successfully processed ${firstUrl}`);
+            processed.push(result.url);
+        } else {
+            const reason = result ? result.status : 'unknown_error';
+            console.warn(`[GmailProcessor] Processing of ${firstUrl} failed with status: ${reason}`);
+            failed.push({ url: firstUrl, reason: reason });
         }
+
     } catch (error) {
         console.error('[GmailProcessor] Error parsing email or processing URL:', error);
+        // If parsing fails, we can't get a URL, but we can log the failure.
+        failed.push({ url: 'unknown', reason: error.message });
     }
+    return { processed, failed };
 }
 
 async function main(urlProcessor = defaultUrlProcessor) {
     console.log('[GmailProcessor] Starting main execution...');
     let imap;
-    let emailsProcessedCount = 0;
+    let emailsData = [];
+    let newestEmailUid = null;
+    let totalProcessedCount = 0;
+    let totalFailed = [];
+
     try {
         imap = await connectToGmail();
-        const { emailsData, newestEmailUid } = await searchEmails(imap);
+        const searchResult = await searchEmails(imap);
+        emailsData = searchResult.emailsData || [];
+        newestEmailUid = searchResult.newestEmailUid;
         
         if (emailsData.length > 0) {
             console.log(`[GmailProcessor] Processing ${emailsData.length} new email(s).`);
             for (const emailData of emailsData) {
-                await processEmail(emailData, urlProcessor);
-                emailsProcessedCount++;
+                const { processed, failed } = await processEmail(emailData, urlProcessor);
+                totalProcessedCount += processed.length;
+                totalFailed.push(...failed);
             }
         } else {
             console.log('[GmailProcessor] No new emails to process.');
         }
 
-        if (newestEmailUid) {
+        const lastUid = await getLastCheckUid();
+        if (newestEmailUid && newestEmailUid > lastUid) {
             await updateLastCheckUid(newestEmailUid);
         }
         
     } catch (error) {
         console.error('[GmailProcessor] An error occurred in main:', error);
-        return { success: false, message: `Error during execution: ${error.message}` };
+        return { 
+            message: `Error during execution: ${error.message}`,
+            processedCount: totalProcessedCount,
+            failedCount: totalFailed.length,
+            failedUrls: totalFailed,
+        };
     } finally {
         if (imap) {
             imap.end();
         }
         console.log('[GmailProcessor] Main execution finished.');
     }
-    return { success: true, message: `Completed. Processed ${emailsProcessedCount} email(s).` };
+    
+    return {
+        message: `Completed. Processed ${totalProcessedCount} URL(s) from ${emailsData.length} email(s).`,
+        processedCount: totalProcessedCount,
+        failedCount: totalFailed.length,
+        failedUrls: totalFailed,
+    };
 }
 
 if (require.main === module) {
-    // ... existing code ...
+    main().then(result => {
+        console.log(result.message);
+        console.log(`Processed URLs: ${result.processedCount}`);
+        console.log(`Failed URLs: ${result.failedCount}`);
+        if (result.failedUrls.length > 0) {
+            console.log('Failed URLs:');
+            result.failedUrls.forEach(failed => console.log(`${failed.url} - Reason: ${failed.reason}`));
+        }
+    });
 }
 
 module.exports = { main }; 
