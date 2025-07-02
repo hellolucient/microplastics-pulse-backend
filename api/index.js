@@ -1,6 +1,7 @@
 require('dotenv').config({ path: require('path').resolve(__dirname, '../.env') }); 
 const express = require('express');
 const cors = require('cors');
+const axios = require('axios');
 const cheerio = require('cheerio');
 const he = require('he');
 const nodemailer = require('nodemailer');
@@ -56,7 +57,28 @@ app.post('/api/add-news', async (req, res) => {
     try {
         const { data: existing } = await supabase.from('latest_news').select('url').eq('url', url).maybeSingle();
         if (existing) return res.status(409).json({ message: 'URL already exists.' });
-        const googleResponse = await fetchArticlesFromGoogle(url, 1);
+                // First try to resolve the URL if it's a shortened/share URL
+        let resolvedUrl = url;
+        if (url.includes('share.google') || url.includes('goo.gl') || url.includes('bit.ly') || url.includes('t.co')) {
+            try {
+                console.log(`[Manual Submission] Resolving shortened URL: ${url}`);
+                
+                // For Google share URLs, use GET request to follow redirects
+                const response = await axios.get(url, { 
+                    timeout: 15000, 
+                    maxRedirects: 15 // Let it follow all redirects without content limits
+                });
+                
+                // Get the final redirected URL
+                resolvedUrl = response.request.res.responseUrl || response.request._redirectable?._currentUrl || url;
+                
+                console.log(`[Manual Submission] URL resolved: ${url} -> ${resolvedUrl}`);
+            } catch (resolveError) {
+                console.warn(`[Manual Submission] Could not resolve URL ${url}, using original. Error: ${resolveError.message}`);
+            }
+        }
+
+        const googleResponse = await fetchArticlesFromGoogle(resolvedUrl, 1);
         if (!googleResponse.success) return res.status(googleResponse.error?.status === 429 ? 429 : 500).json({ error: 'API communication error.' });
         const searchResults = googleResponse.articles;
         if (!searchResults || searchResults.length === 0) return res.status(404).json({ error: 'Could not retrieve metadata.' });
