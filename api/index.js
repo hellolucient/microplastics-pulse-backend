@@ -51,12 +51,40 @@ app.use(cors({
 app.get('/api', (req, res) => res.send('Microplastics Pulse Backend API is running!'));
 
 app.post('/api/add-news', async (req, res) => {
-    if (!supabase) return res.status(503).json({ error: 'Database client not available.' });
+    // Check database availability
+    if (!supabase) return res.status(503).json({ 
+        error: 'Database client not available.',
+        details: 'The database connection is not initialized. Please try again later.',
+        code: 'DB_UNAVAILABLE'
+    });
+
     const { url } = req.body;
-    if (!url || !url.startsWith('http')) return res.status(400).json({ error: 'Invalid or missing URL.' });
+    
+    // Validate URL
+    if (!url) {
+        return res.status(400).json({ 
+            error: 'Missing URL.',
+            details: 'Please provide a URL to process.',
+            code: 'URL_MISSING'
+        });
+    }
+    
+    if (!url.startsWith('http')) {
+        return res.status(400).json({ 
+            error: 'Invalid URL format.',
+            details: 'URL must start with http:// or https://',
+            code: 'URL_INVALID_FORMAT'
+        });
+    }
+
     try {
+        // Check for existing URL
         const { data: existing } = await supabase.from('latest_news').select('url').eq('url', url).maybeSingle();
-        if (existing) return res.status(409).json({ message: 'URL already exists.' });
+        if (existing) return res.status(409).json({ 
+            error: 'URL already exists.',
+            details: 'This article has already been processed and exists in our database.',
+            code: 'URL_DUPLICATE'
+        });
                 // First try to resolve the URL if it's a shortened/share URL
         let resolvedUrl = url;
         if (url.includes('share.google') || url.includes('goo.gl') || url.includes('bit.ly') || url.includes('t.co')) {
@@ -78,20 +106,99 @@ app.post('/api/add-news', async (req, res) => {
             }
         }
 
+        // Fetch article metadata from Google
         const googleResponse = await fetchArticlesFromGoogle(resolvedUrl, 1);
-        if (!googleResponse.success) return res.status(googleResponse.error?.status === 429 ? 429 : 500).json({ error: 'API communication error.' });
+        if (!googleResponse.success) {
+            if (googleResponse.error?.status === 429) {
+                return res.status(429).json({ 
+                    error: 'Rate limit exceeded.',
+                    details: 'Too many requests to Google API. Please try again in a few minutes.',
+                    code: 'GOOGLE_RATE_LIMIT'
+                });
+            }
+            return res.status(500).json({ 
+                error: 'Google API communication error.',
+                details: googleResponse.error?.message || 'Failed to fetch article metadata from Google.',
+                code: 'GOOGLE_API_ERROR'
+            });
+        }
+
         const searchResults = googleResponse.articles;
-        if (!searchResults || searchResults.length === 0) return res.status(404).json({ error: 'Could not retrieve metadata.' });
+        if (!searchResults || searchResults.length === 0) {
+            return res.status(404).json({ 
+                error: 'Article not found.',
+                details: 'Could not find article metadata via Google Search. The article might be too new or not indexed.',
+                code: 'ARTICLE_NOT_FOUND'
+            });
+        }
+
         const articleData = searchResults[0];
         const sourceHostname = new URL(url).hostname;
-        const ai_summary = await summarizeText(articleData.title, articleData.snippet);
-        const ai_image_url = await generateAndStoreImage(articleData.title, articleData.link);
-        const newItem = { url: articleData.link, title: articleData.title, ai_summary, ai_image_url, source: sourceHostname, processed_at: new Date().toISOString() };
-        const { error: insertError } = await supabase.from('latest_news').insert(newItem);
-        if (insertError) throw insertError;
-        return res.status(201).json({ message: 'Article processed successfully.', data: newItem });
+
+        try {
+            // Generate AI summary
+            const ai_summary = await summarizeText(articleData.title, articleData.snippet);
+            if (!ai_summary) {
+                return res.status(500).json({ 
+                    error: 'AI summary generation failed.',
+                    details: 'Failed to generate article summary using AI.',
+                    code: 'AI_SUMMARY_FAILED'
+                });
+            }
+
+            // Generate AI image
+            const ai_image_url = await generateAndStoreImage(articleData.title, articleData.link);
+            if (!ai_image_url) {
+                return res.status(500).json({ 
+                    error: 'AI image generation failed.',
+                    details: 'Failed to generate or store article image.',
+                    code: 'AI_IMAGE_FAILED'
+                });
+            }
+
+            // Prepare and insert new item
+            const newItem = { 
+                url: articleData.link, 
+                title: articleData.title, 
+                ai_summary, 
+                ai_image_url, 
+                source: sourceHostname, 
+                processed_at: new Date().toISOString() 
+            };
+
+            const { error: insertError } = await supabase.from('latest_news').insert(newItem);
+            if (insertError) {
+                if (insertError.code === '23505') {
+                    return res.status(409).json({ 
+                        error: 'URL already exists.',
+                        details: 'This article was added by another process while we were processing it.',
+                        code: 'URL_DUPLICATE_RACE'
+                    });
+                }
+                throw insertError;
+            }
+
+            return res.status(201).json({ 
+                message: 'Article processed successfully.',
+                data: newItem,
+                code: 'SUCCESS'
+            });
+
+        } catch (error) {
+            console.error('Error processing article:', error);
+            return res.status(500).json({ 
+                error: 'Internal server error.',
+                details: error.message || 'An unexpected error occurred while processing the article.',
+                code: error.code || 'INTERNAL_ERROR'
+            });
+        }
     } catch (error) {
-        return res.status(error.code === '23505' ? 409 : 500).json({ error: 'Internal server error.', details: error.message });
+        console.error('Error in add-news endpoint:', error);
+        return res.status(500).json({ 
+            error: 'Internal server error.',
+            details: error.message || 'An unexpected error occurred while processing the request.',
+            code: error.code || 'INTERNAL_ERROR'
+        });
     }
 });
 
