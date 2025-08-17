@@ -400,10 +400,67 @@ async function processEmail(emailData, urlProcessor) {
         if (result && result.status === 'success') {
             console.log(`[GmailProcessor] Successfully processed ${firstUrl}`);
             processed.push(result.url);
+            
+            // If this URL was previously failed, mark it as resolved
+            if (supabase) {
+                const { error: updateError } = await supabase
+                    .from('failed_email_urls')
+                    .update({
+                        resolved_at: new Date().toISOString(),
+                        resolved_status: 'success'
+                    })
+                    .eq('url', firstUrl)
+                    .is('resolved_at', null);
+                
+                if (updateError) {
+                    console.error('[GmailProcessor] Error updating resolved status:', updateError);
+                }
+            }
         } else {
             const reason = result ? result.status : 'unknown_error';
             console.warn(`[GmailProcessor] Processing of ${firstUrl} failed with status: ${reason}`);
             failed.push({ url: firstUrl, reason: reason });
+            
+            // Store failed URL in Supabase
+            if (supabase) {
+                // Check if this URL has failed before
+                const { data: existingFail, error: checkError } = await supabase
+                    .from('failed_email_urls')
+                    .select('id, attempts')
+                    .eq('url', firstUrl)
+                    .is('resolved_at', null)
+                    .maybeSingle();
+                
+                if (checkError) {
+                    console.error('[GmailProcessor] Error checking for existing failed URL:', checkError);
+                } else if (existingFail) {
+                    // Update existing record with incremented attempts
+                    const { error: updateError } = await supabase
+                        .from('failed_email_urls')
+                        .update({ 
+                            attempts: existingFail.attempts + 1,
+                            reason: reason // Update with latest failure reason
+                        })
+                        .eq('id', existingFail.id);
+                    
+                    if (updateError) {
+                        console.error('[GmailProcessor] Error updating failed URL attempts:', updateError);
+                    }
+                } else {
+                    // Insert new failed URL record
+                    const { error: insertError } = await supabase
+                        .from('failed_email_urls')
+                        .insert({
+                            url: firstUrl,
+                            reason: reason,
+                            subject: subject
+                        });
+                    
+                    if (insertError) {
+                        console.error('[GmailProcessor] Error inserting failed URL:', insertError);
+                    }
+                }
+            }
         }
 
     } catch (error) {

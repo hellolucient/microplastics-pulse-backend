@@ -206,6 +206,65 @@ app.get('/api/search-queries', (req, res) => {
   res.status(200).json({ queries: SEARCH_QUERIES });
 });
 
+// --- Failed URLs Management ---
+app.get('/api/admin/failed-urls', async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database client not available.' });
+
+  try {
+    const { data, error } = await supabase
+      .from('failed_email_urls')
+      .select('*')
+      .is('resolved_at', null)
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+
+    return res.status(200).json({
+      failedUrls: data,
+      count: data.length
+    });
+  } catch (error) {
+    console.error('Error fetching failed URLs:', error);
+    return res.status(500).json({ 
+      error: 'Failed to fetch failed URLs.',
+      details: error.message
+    });
+  }
+});
+
+app.post('/api/admin/failed-urls/clear', async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database client not available.' });
+  
+  const { urls } = req.body;
+  if (!urls || !Array.isArray(urls) || urls.length === 0) {
+    return res.status(400).json({ error: 'Invalid or missing URLs array.' });
+  }
+
+  try {
+    const { error } = await supabase
+      .from('failed_email_urls')
+      .update({
+        resolved_at: new Date().toISOString(),
+        resolved_status: 'manually_cleared'
+      })
+      .in('url', urls)
+      .is('resolved_at', null);
+
+    if (error) throw error;
+
+    return res.status(200).json({
+      message: `Successfully cleared ${urls.length} failed URL(s).`,
+      clearedUrls: urls
+    });
+  } catch (error) {
+    console.error('Error clearing failed URLs:', error);
+    return res.status(500).json({ 
+      error: 'Failed to clear URLs.',
+      details: error.message
+    });
+  }
+});
+
 app.get('/api/latest-news', async (req, res) => {
   if (!supabase) return res.status(503).json({ error: 'Database client not available.' });
   try {
