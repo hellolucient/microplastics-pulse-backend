@@ -146,32 +146,55 @@ async function defaultUrlProcessor(url, subject) {
   console.log(`[UrlProcessor] Starting processing for URL: ${url}`);
   
   let finalUrl = url;
-  try {
-      // For Google share URLs and other shortened URLs, try HEAD first, then limited GET
+  
+  // Try to resolve the URL if it's a shortened/share URL
   if (url.includes('share.google') || url.includes('goo.gl') || url.includes('bit.ly') || url.includes('t.co')) {
     console.log(`[UrlProcessor] Detected shortened/share URL, resolving: ${url}`);
     try {
       // Try HEAD request first (no content download)
-      const response = await axios.head(url, { timeout: 15000, maxRedirects: 10 });
-      // Get the final redirected URL
-      finalUrl = response.request.res.responseUrl || response.request._redirectable?._currentUrl || url;
-    } catch (headError) {
-      console.log(`[UrlProcessor] HEAD failed, trying limited GET...`);
-      // If HEAD fails, try unlimited GET to follow redirects
-      const response = await axios.get(url, { 
+      const response = await axios.head(url, { 
         timeout: 15000, 
-        maxRedirects: 10
+        maxRedirects: 10,
+        validateStatus: null // Accept any status code
       });
       // Get the final redirected URL
       finalUrl = response.request.res.responseUrl || response.request._redirectable?._currentUrl || url;
+      console.log(`[UrlProcessor] Resolved URL via HEAD: ${url} -> ${finalUrl}`);
+    } catch (headError) {
+      console.log(`[UrlProcessor] HEAD failed, trying GET...`);
+      try {
+        // If HEAD fails, try GET request
+        const response = await axios.get(url, { 
+          timeout: 15000, 
+          maxRedirects: 10,
+          validateStatus: null // Accept any status code
+        });
+        // Get the final redirected URL
+        finalUrl = response.request.res.responseUrl || response.request._redirectable?._currentUrl || url;
+        console.log(`[UrlProcessor] Resolved URL via GET: ${url} -> ${finalUrl}`);
+      } catch (getError) {
+        // If both HEAD and GET fail, log it but continue with original URL
+        console.log(`[UrlProcessor] Both HEAD and GET failed for ${url}. Using original URL.`);
+        console.log(`[UrlProcessor] HEAD error: ${headError.message}`);
+        console.log(`[UrlProcessor] GET error: ${getError.message}`);
+      }
     }
   } else {
-    const response = await axios.head(url, { timeout: 15000, maxRedirects: 5 });
-    finalUrl = response.request.res.responseUrl || url;
-  }
-    console.log(`[UrlProcessor] Resolved URL: ${url} -> ${finalUrl}`);
-  } catch (headError) {
-    console.warn(`[UrlProcessor] URL resolution failed for ${url}. Using original URL. Error: ${headError.message}`);
+    // For non-shortened URLs, just try a HEAD request
+    try {
+      const response = await axios.head(url, { 
+        timeout: 15000, 
+        maxRedirects: 5,
+        validateStatus: null // Accept any status code
+      });
+      finalUrl = response.request.res.responseUrl || url;
+      if (finalUrl !== url) {
+        console.log(`[UrlProcessor] URL redirected: ${url} -> ${finalUrl}`);
+      }
+    } catch (error) {
+      // If HEAD fails, just use the original URL
+      console.log(`[UrlProcessor] URL check failed for ${url}. Using original URL.`);
+    }
   }
   
   try {
