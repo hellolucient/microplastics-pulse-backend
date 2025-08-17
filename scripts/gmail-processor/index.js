@@ -501,6 +501,7 @@ async function main(urlProcessor = defaultUrlProcessor) {
     let newestEmailUid = null;
     let totalProcessedCount = 0;
     let totalFailed = [];
+    let totalProcessed = [];
 
     try {
         imap = await connectToGmail();
@@ -514,6 +515,7 @@ async function main(urlProcessor = defaultUrlProcessor) {
                 const { processed, failed } = await processEmail(emailData, urlProcessor);
                 totalProcessedCount += processed.length;
                 totalFailed.push(...failed);
+                totalProcessed.push(...processed);
             }
         } else {
             console.log('[GmailProcessor] No new emails to process.');
@@ -544,6 +546,7 @@ async function main(urlProcessor = defaultUrlProcessor) {
         processedCount: totalProcessedCount,
         failedCount: totalFailed.length,
         failedUrls: totalFailed,
+        processed: totalProcessed // Add the array of successfully processed URLs
     };
 }
 
