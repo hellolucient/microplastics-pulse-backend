@@ -465,17 +465,71 @@ app.post('/api/regenerate-image', async (req, res) => {
 });
 
 app.post('/api/admin/check-emails', async (req, res) => {
-  console.log("API: Received request to /api/admin/check-emails");
+  console.log("[API] Received request to /api/admin/check-emails");
+  
+  // Check if required environment variables are set
+  if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+    console.error("[API] Email check failed: Missing email credentials");
+    return res.status(500).json({
+      error: 'Email configuration missing',
+      details: 'Email credentials are not properly configured on the server.',
+      code: 'EMAIL_CONFIG_MISSING'
+    });
+  }
+
+  if (!supabase) {
+    console.error("[API] Email check failed: Supabase client not available");
+    return res.status(503).json({
+      error: 'Database client not available',
+      details: 'The database connection is not initialized.',
+      code: 'DB_UNAVAILABLE'
+    });
+  }
+
   try {
+    console.log("[API] Starting email check with credentials:", { 
+      user: process.env.EMAIL_USER,
+      hasPassword: !!process.env.EMAIL_PASS
+    });
+
     const result = await runEmailCheck();
-    console.log("API: Email check completed, result:", result);
+    console.log("[API] Email check completed successfully:", result);
     res.status(200).json(result);
   } catch (error) {
-    console.error("API: Error during manual email check:", error);
-    res.status(500).json({ 
-      error: 'Failed to execute email check.', 
-      details: error.message 
-    });
+    console.error("[API] Error during manual email check:", error);
+    
+    // Determine the specific error type
+    let statusCode = 500;
+    let errorResponse = {
+      error: 'Failed to execute email check',
+      details: error.message,
+      code: 'UNKNOWN_ERROR'
+    };
+
+    if (error.code === 'EAUTH') {
+      statusCode = 401;
+      errorResponse = {
+        error: 'Email authentication failed',
+        details: 'Failed to authenticate with Gmail. Please check email credentials.',
+        code: 'EMAIL_AUTH_FAILED'
+      };
+    } else if (error.code === 'ETIMEDOUT') {
+      statusCode = 504;
+      errorResponse = {
+        error: 'Connection timeout',
+        details: 'Connection to Gmail timed out. Please try again.',
+        code: 'EMAIL_TIMEOUT'
+      };
+    } else if (error.code === 'ECONNREFUSED') {
+      statusCode = 503;
+      errorResponse = {
+        error: 'Connection refused',
+        details: 'Could not connect to Gmail server. Please try again later.',
+        code: 'EMAIL_CONNECTION_FAILED'
+      };
+    }
+
+    res.status(statusCode).json(errorResponse);
   }
 });
 
