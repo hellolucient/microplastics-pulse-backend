@@ -210,8 +210,8 @@ async function defaultUrlProcessor(url, subject) {
       return { status: 'db_error', url: finalUrl };
     }
     if (existing) {
-      console.log(`[UrlProcessor] URL already exists. Skipping: ${finalUrl}`);
-      return { status: 'skipped_duplicate', url: finalUrl };
+      console.log(`[UrlProcessor] URL already exists. Marking as success: ${finalUrl}`);
+      return { status: 'success', url: finalUrl }; // Change to success since it's in the DB
     }
 
     // --- Process the new article ---
