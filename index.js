@@ -340,10 +340,11 @@ async function processQueryAndSave(query) {
     return 0;
   }
 
-  // Get all existing URLs from DB once for efficiency
-  const { data: existingUrlsData, error: urlFetchError } = await supabase
+  // Get ALL existing URLs from DB (fix 1000 row limit)
+  const { data: existingUrlsData, error: urlFetchError, count } = await supabase
     .from('latest_news')
-    .select('url');
+    .select('url', { count: 'exact' })
+    .limit(5000);
 
   if (urlFetchError) {
       console.error('Error fetching existing URLs from Supabase:', urlFetchError);
@@ -352,7 +353,7 @@ async function processQueryAndSave(query) {
       return 0;
   }
   const existingUrls = new Set(existingUrlsData.map(item => item.url));
-  console.log(`Found ${existingUrls.size} existing URLs in DB.`);
+  console.log(`Found ${existingUrls.size} existing URLs in DB (total count: ${count}).`);
 
   for (const article of articles) {
     const { title, link: url, snippet } = article; // Use 'link' as the url
