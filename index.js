@@ -340,19 +340,43 @@ async function processQueryAndSave(query) {
     return 0;
   }
 
-  // Get ALL existing URLs from DB (fix 1000 row limit)
-  const { data: existingUrlsData, error: urlFetchError, count } = await supabase
+  // Get ALL existing URLs from DB using pagination (Supabase 1000 row limit)
+  console.log('Fetching all existing URLs with pagination...');
+  let allExistingUrls = [];
+  const pageSize = 1000;
+  let page = 0;
+  
+  // Get total count first
+  const { count, error: countError } = await supabase
     .from('latest_news')
-    .select('url', { count: 'exact' })
-    .limit(5000);
-
-  if (urlFetchError) {
-      console.error('Error fetching existing URLs from Supabase:', urlFetchError);
-      // Decide if we should stop or continue without checking duplicates
-      // Let's stop for now to avoid potential duplicate processing errors
-      return 0;
+    .select('*', { count: 'exact', head: true });
+    
+  if (countError) {
+    console.error('Error getting count from Supabase:', countError);
+    return 0;
   }
-  const existingUrls = new Set(existingUrlsData.map(item => item.url));
+  
+  // Fetch all URLs using pagination
+  while (true) {
+    const { data: pageData, error: urlFetchError } = await supabase
+      .from('latest_news')
+      .select('url')
+      .range(page * pageSize, (page + 1) * pageSize - 1);
+      
+    if (urlFetchError) {
+      console.error('Error fetching existing URLs from Supabase:', urlFetchError);
+      return 0;
+    }
+    
+    if (!pageData || pageData.length === 0) break;
+    
+    allExistingUrls.push(...pageData);
+    
+    if (pageData.length < pageSize) break; // Last page
+    page++;
+  }
+  
+  const existingUrls = new Set(allExistingUrls.map(item => item.url));
   console.log(`Found ${existingUrls.size} existing URLs in DB (total count: ${count}).`);
 
   for (const article of articles) {
