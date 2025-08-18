@@ -410,57 +410,9 @@ async function processQueryAndSave(query) {
   return newArticlesAdded;
 }
 
-/**
- * Endpoint to manually trigger a fetch cycle for predefined queries.
- */
-app.post('/api/trigger-fetch', async (req, res) => {
-  console.log('Manual fetch triggered via API.');
-  const searchQueries = [
-    "latest research microplastics human health site:nature.com OR site:sciencedirect.com",
-    "global microplastic pollution report 2025 site:who.int OR site:unep.org",
-    "microplastics ubiquity environment food chain site:nature.com",
-    "emerging health concerns microplastics 2025 site:thelancet.com OR site:nih.gov",
-    "policy innovation to prevent microplastic contamination 2025",
-    "how microplastics enter the human body ingestion inhalation dermal site:ncbi.nlm.nih.gov",
-    "bioaccumulation of microplastics in human organs site:sciencedirect.com",
-    "crossing blood brain barrier microplastics placenta gut brain site:nature.com",
-    "translocation of microplastics to brain or placenta site:cell.com",
-    "microplastics inflammation oxidative stress endocrine disruption site:ncbi.nlm.nih.gov",
-    "microplastics gut microbiome dysbiosis immunity site:gut.bmj.com OR site:nature.com",
-    "microplastics reproductive health fetal exposure site:thelancet.com",
-    "microplastics impact on brain neurological disorders site:sciencedirect.com",
-    "microplastics and chronic disease cancer diabetes cardiovascular site:who.int",
-    "microplastics linked to erectile dysfunction antibiotic resistance superbugs",
-    "food contamination microplastics seafood produce packaging site:efsa.europa.eu",
-    "airborne microplastics indoor exposure site:epa.gov OR site:pubmed.ncbi.nlm.nih.gov",
-    "textiles cosmetics furniture microplastic emissions site:echa.europa.eu",
-    "wellness industry microplastics awareness detox contradictions site:gwi.org",
-    "clean living vs microplastic reality wellness narrative site:mindbodygreen.com OR site:wellandgood.com",
-    "microplastics detox evidence probiotics antioxidants site:ncbi.nlm.nih.gov",
-    "individual microplastic exposure reduction tips 2025 site:cdc.gov OR site:who.int",
-    "new technologies microplastic removal blood purification 2025",
-    "probiotic and antioxidant strategies microplastic detox site:sciencedirect.com",
-    "wellness program standards to reduce microplastic exposure site:spaindustry.org",
-    "2025 microplastic research priorities wellness industry site:gwi.org OR site:nih.gov",
-    "call to action microplastics wellness sustainability site:globalwellnesssummit.com",
-    "research gaps in microplastic and human health site:thelancet.com OR site:who.int"
-  ];
-  let totalAdded = 0;
-  let errorsOccurred = false;
-
-  try {
-    // Process queries sequentially to avoid overwhelming APIs (can be parallelized carefully later)
-    for (const query of searchQueries) {
-      const addedCount = await processQueryAndSave(query);
-      totalAdded += addedCount;
-    }
-    console.log(`Manual fetch completed. Total new articles added: ${totalAdded}`);
-    res.status(200).json({ message: 'Fetch cycle completed.', newArticlesAdded: totalAdded });
-  } catch (error) {
-    console.error('Error during manual fetch cycle:', error);
-    res.status(500).json({ error: 'An error occurred during the fetch cycle.' });
-  }
-});
+// NOTE: trigger-fetch endpoint moved to api/index.js to avoid conflicts
+// This duplicate endpoint was causing 502 errors and desynchronization issues
+// The main endpoint is now handled in api/index.js with proper query-by-query processing
 
 // --- Scheduled Tasks ---
 // TODO: Update cron job to call processQueryAndSave for each query

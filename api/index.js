@@ -366,27 +366,64 @@ app.get('/api/admin/automation-logs', async (req, res) => {
 });
 
 app.all('/api/trigger-fetch', async (req, res) => {
-  if (req.method === 'GET') {
-    let totalAddedByCron = 0;
-    for (const query of SEARCH_QUERIES) {
-      const result = await processQueryAndSave(query);
-      if (result.status === 'success') totalAddedByCron += result.count;
-    }
-    return res.status(200).json({ message: 'Cron fetch cycle completed.', totalAdded: totalAddedByCron });
-  } else if (req.method === 'POST') {
-    let { queryIndex } = req.body;
-    if (typeof queryIndex !== 'number' || queryIndex < 0 || queryIndex >= SEARCH_QUERIES.length) {
-      return res.status(400).json({ error: 'Invalid queryIndex provided.' });
-    }
-    const result = await processQueryAndSave(SEARCH_QUERIES[queryIndex]);
-    if (result.status === 'success') {
-      const nextIndex = (queryIndex + 1 < SEARCH_QUERIES.length) ? queryIndex + 1 : null;
-      return res.status(200).json({ message: `Query ${queryIndex + 1}/${SEARCH_QUERIES.length} processed.`, addedCount: result.count, nextIndex: nextIndex });
+  try {
+    // Set a response timeout to prevent hanging
+    const timeout = setTimeout(() => {
+      if (!res.headersSent) {
+        console.error('[trigger-fetch] Request timeout after 110 seconds');
+        res.status(504).json({ 
+          error: 'Request timeout', 
+          details: 'Query processing took too long. The query may still be running in the background.' 
+        });
+      }
+    }, 110000); // 110 second timeout (Railway has 120s limit)
+
+    if (req.method === 'GET') {
+      let totalAddedByCron = 0;
+      for (const query of SEARCH_QUERIES) {
+        const result = await processQueryAndSave(query);
+        if (result.status === 'success') totalAddedByCron += result.count;
+      }
+      clearTimeout(timeout);
+      return res.status(200).json({ message: 'Cron fetch cycle completed.', totalAdded: totalAddedByCron });
+    } else if (req.method === 'POST') {
+      let { queryIndex } = req.body;
+      if (typeof queryIndex !== 'number' || queryIndex < 0 || queryIndex >= SEARCH_QUERIES.length) {
+        clearTimeout(timeout);
+        return res.status(400).json({ error: 'Invalid queryIndex provided.' });
+      }
+      
+      console.log(`[trigger-fetch] Processing query ${queryIndex + 1}/${SEARCH_QUERIES.length}: "${SEARCH_QUERIES[queryIndex]}"`);
+      const result = await processQueryAndSave(SEARCH_QUERIES[queryIndex]);
+      clearTimeout(timeout);
+      
+      if (result.status === 'success') {
+        const nextIndex = (queryIndex + 1 < SEARCH_QUERIES.length) ? queryIndex + 1 : null;
+        return res.status(200).json({ 
+          message: `Query ${queryIndex + 1}/${SEARCH_QUERIES.length} processed.`, 
+          addedCount: result.count, 
+          nextIndex: nextIndex 
+        });
+      } else {
+        console.error(`[trigger-fetch] Query ${queryIndex + 1} failed:`, result);
+        return res.status(500).json({ 
+          error: 'Failed to process query.', 
+          details: result.status,
+          queryIndex: queryIndex
+        });
+      }
     } else {
-      return res.status(500).json({ error: 'Failed to process query.', details: result.error });
+      clearTimeout(timeout);
+      return res.status(405).json({ error: `Method ${req.method} not allowed.` });
     }
-  } else {
-    return res.status(405).json({ error: `Method ${req.method} not allowed.` });
+  } catch (error) {
+    console.error('[trigger-fetch] Unexpected error:', error);
+    if (!res.headersSent) {
+      return res.status(500).json({ 
+        error: 'Internal server error', 
+        details: error.message 
+      });
+    }
   }
 });
 
