@@ -352,15 +352,23 @@ async function searchEmails(imap) {
                 
                 console.log('[GmailProcessor] Raw search results:', results); // DEBUG LOGGING
 
-                const newestEmailUid = results.length > 0 ? Math.max(lastUid || 0, ...results) : lastUid;
-                console.log(`Found ${results.length} email(s) to process. Newest UID in batch will be ${newestEmailUid}.`);
+                // Filter out UIDs that are <= lastUid to avoid reprocessing
+                const filteredResults = results.filter(uid => !lastUid || uid > lastUid);
+                console.log(`[GmailProcessor] Filtered results (UIDs > ${lastUid}):`, filteredResults);
 
-                if (results.length === 0) {
+                const newestEmailUid = results.length > 0 ? Math.max(lastUid || 0, ...results) : lastUid;
+                console.log(`Found ${filteredResults.length} new email(s) to process. Newest UID in batch will be ${newestEmailUid}.`);
+
+                if (filteredResults.length === 0) {
+                    console.log('[GmailProcessor] No new emails after filtering. All emails already processed.');
                     resolve({ emailsData: [], newestEmailUid: lastUid });
                     return;
                 }
 
-                const f = imap.fetch(results, { bodies: '', markSeen: false }); // Fetch all results
+                // Use filtered results for fetching
+                const resultsToFetch = filteredResults;
+
+                const f = imap.fetch(resultsToFetch, { bodies: '', markSeen: false }); // Fetch only new results
                 const emailsData = [];
 
                 f.on('message', (msg, seqno) => {
@@ -521,9 +529,13 @@ async function main(urlProcessor = defaultUrlProcessor) {
             console.log('[GmailProcessor] No new emails to process.');
         }
 
-        const lastUid = await getLastCheckUid();
-        if (newestEmailUid && newestEmailUid > lastUid) {
-            await updateLastCheckUid(newestEmailUid);
+        // Always update the UID if we processed emails to prevent reprocessing
+        if (newestEmailUid && emailsData.length > 0) {
+            const lastUid = await getLastCheckUid();
+            // Ensure we move forward: if we processed emails, set UID to at least the highest processed
+            const nextUid = Math.max(newestEmailUid, lastUid || 0);
+            await updateLastCheckUid(nextUid);
+            console.log(`[GmailProcessor] Updated last check UID from ${lastUid} to ${nextUid} after processing ${emailsData.length} email(s)`);
         }
         
     } catch (error) {
