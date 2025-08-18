@@ -570,15 +570,51 @@ app.post('/api/admin/check-emails', async (req, res) => {
   }
 });
 
-// Determine the cron schedule from environment variables, with a default.
-// The default '0 */8 * * *' runs every 8 hours (e.g., at 00:00, 08:00, 16:00).
-const cronSchedule = process.env.CRON_SCHEDULE || '0 */8 * * *'; 
+// Determine the cron schedule from environment variables, with a sensible daily default.
+// Default '0 2 * * *' runs once daily at 2:00 AM UTC (good for automation)
+// Alternative: '0 0 * * *' for midnight UTC
+const cronSchedule = process.env.CRON_SCHEDULE || '0 2 * * *'; 
 
 // --- Scheduled Tasks ---
 console.log(`[Scheduler] Setting up cron job with schedule: "${cronSchedule}"`);
-cron.schedule(cronSchedule, () => {
+console.log(`[Scheduler] This translates to: ${cronSchedule === '0 2 * * *' ? 'Daily at 2:00 AM UTC' : 'Custom schedule'}`);
+
+cron.schedule(cronSchedule, async () => {
     console.log('[Scheduler] Triggering scheduled tasks due to schedule.');
-    runScheduledTasks();
+    try {
+        await runScheduledTasks();
+        console.log('[Scheduler] Scheduled tasks completed successfully.');
+    } catch (error) {
+        console.error('[Scheduler] CRITICAL ERROR during scheduled tasks:', error);
+        // Continue running - don't crash the server
+    }
+}, {
+    scheduled: true,
+    timezone: "UTC"
+});
+
+// Add startup verification
+console.log('[Scheduler] Cron job initialized successfully.');
+console.log(`[Scheduler] Current UTC time: ${new Date().toISOString()}`);
+console.log(`[Scheduler] Next scheduled run will be determined by: "${cronSchedule}"`);
+
+// Add manual trigger endpoint for testing
+app.post('/api/admin/trigger-automation', async (req, res) => {
+    try {
+        console.log('[Admin] Manual automation trigger requested.');
+        await runScheduledTasks();
+        res.status(200).json({ 
+            message: 'Automation tasks completed successfully.',
+            timestamp: new Date().toISOString()
+        });
+    } catch (error) {
+        console.error('[Admin] Error during manual automation trigger:', error);
+        res.status(500).json({ 
+            error: 'Automation tasks failed.',
+            details: error.message,
+            timestamp: new Date().toISOString()
+        });
+    }
 });
 
 app.post('/api/admin/check-duplicates', async (req, res) => {
