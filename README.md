@@ -2,7 +2,9 @@
 
 ## 1. Overview
 
-The MicroPlastics Pulse Project is a web application designed to aggregate, process, and display the latest news and research related to microplastics. It aims to provide users with a curated feed of articles, enhanced with AI-generated summaries and illustrative images, to highlight the pervasiveness and impact of microplastics on health and the environment.
+The MicroPlastics Pulse Project is a web application designed to aggregate, process, and display the latest news and research related to microplastics. This backend service provides a robust API with **automated daily scheduling**, **AI-powered content enhancement**, and **comprehensive administration tools**.
+
+**Current Status**: Production-ready system deployed on Railway with reliable daily automation at 2:00 AM UTC.
 
 ## 2. How It Works (High-Level Flow)
 
@@ -49,8 +51,8 @@ The project is organized into two main repositories, typically managed within a 
     *   **Responsibilities:** User interface, presenting the news feed, admin dashboard interactions, and communication with the backend API.
 
 2.  **`microplastics-pulse-backend`**
-    *   **Description:** Contains the backend API built with Node.js and Express.js, designed for serverless deployment on Vercel.
-    *   **Responsibilities:** API endpoints for fetching/serving news, handling article submissions, AI processing (summaries, images), database interactions (Supabase), and interfacing with Google Search and Vercel Blob.
+    *   **Description:** Contains the backend API built with Node.js and Express.js, deployed on Railway with persistent process and automated scheduling.
+    *   **Responsibilities:** API endpoints for fetching/serving news, automated daily tasks (Google fetch, email check, Twitter posting), AI processing (summaries, images), database interactions (Supabase), and comprehensive admin tools.
 
 ## 5. Tech Stack
 
@@ -73,7 +75,12 @@ The project is organized into two main repositories, typically managed within a 
 *   **External Search:**
     *   Google Custom Search API
 *   **Deployment & Hosting:**
-    *   Vercel (for frontend and backend serverless functions)
+    *   Frontend: Vercel
+    *   Backend: Railway (persistent Node.js process with cron scheduling)
+*   **Automation:**
+    *   node-cron (daily scheduled tasks)
+    *   Twitter API v2 (automated posting)
+    *   Gmail IMAP (email processing)
 
 ## 6. Key Backend API Endpoints
 
@@ -82,10 +89,12 @@ The backend exposes several key API endpoints under the `/api` path:
 *   `GET /latest-news`: Fetches the list of processed news articles for the public feed.
 *   `POST /add-news`: Allows manual submission of a new article URL for processing.
 *   `POST /trigger-fetch`: (Used by Admin Panel) Triggers the processing of a single search query by its index.
-    *   *Note: The `GET /trigger-fetch` for a full cron-style run was found to be problematic due to serverless execution limits and is effectively deprecated in favor of the manual, step-by-step fetch from the admin panel.*
-*   `POST /batch-update-stories`: Processes a batch of stories from the database. Currently configured to find stories where `ai_image_url` is NULL and regenerate both the summary and image.
-*   `POST /regenerate-image`: Regenerates the AI image for a specific article identified by its UUID.
-*   `GET /search-queries`: Returns the predefined list of search queries used for fetching articles.
+*   `POST /admin/trigger-automation`: **NEW** - Manually run the full automation suite (Google + Email + Twitter)
+*   `POST /admin/check-duplicates`: **NEW** - Database integrity checker with comprehensive duplicate detection
+*   `POST /admin/check-emails`: Trigger email processing for submitted article URLs
+*   `POST /batch-update-stories`: Processes a batch of stories from the database for missing AI images
+*   `POST /regenerate-image`: Regenerates the AI image for a specific article by UUID
+*   `GET /search-queries`: Returns the predefined list of search queries used for fetching articles
 
 ## 7. Setup & Running Locally (Brief Guide)
 
@@ -118,33 +127,80 @@ To set up and run the project locally, you'll generally need to:
     *   **Backend:** `cd microplastics-pulse-backend && npm run dev` (or your configured script, often `node api/index.js` for local testing if set up for it).
     *   **Frontend:** `cd microplastics-pulse-frontend && npm run dev` (or `yarn dev`). This will usually start the Vite development server, and you can access the frontend in your browser (typically `http://localhost:5173` or similar).
 
-## 8. Future Considerations / Potential Improvements
+## 8. Automated Daily Tasks (2:00 AM UTC)
 
-*   **Cron Job Robustness:** If automated fetching is desired on Vercel, explore options like:
-    *   Modifying the cron-triggered backend function to process only a small subset of queries per invocation, using a persistent store (like a Supabase table or Vercel KV) to track progress between runs.
-    *   Using an external, more robust cron job service that calls a simple trigger endpoint on Vercel.
-*   **UI for Search Query Management:** Allow admins to add/edit/delete search queries directly from the admin panel.
-*   **Image Cropping/Editing:** Basic tools to adjust or select from multiple AI-generated image variants.
-*   **Detailed Logging/Monitoring:** Enhanced logging for easier debugging of backend processes.
-*   **Scalability:** For significantly higher traffic or processing loads, a move from serverless to a dedicated server (as discussed) might be necessary, requiring infrastructure management.
+**Reliable Scheduling with node-cron on Railway:**
+*   **Google News Fetch**: Searches for new articles using predefined queries
+*   **Email Processing**: Checks Gmail for user-submitted article URLs
+*   **Twitter Posting**: Automatically posts tweets about latest articles with duplicate handling
+*   **Error Handling**: Individual task failures don't stop the automation suite
+*   **Manual Testing**: Admin panel provides "Run Full Automation Suite" button
 
-## Important Note: Email Processing Cron Job (scripts/gmail-processor/)
+## 9. Recent Improvements (August 2024)
 
-**Date: 2025-05-20**
+**🔧 Reliability Fixes:**
+*   Fixed 4-day scheduling gaps by correcting Railway deployment configuration
+*   Eliminated race conditions in URL duplicate detection
+*   Enhanced error handling prevents server crashes during automation
+*   Resolved 502 errors with proper timeout handling
 
-The current email processing script (`scripts/gmail-processor/index.js`), when run via the Vercel Cron Job (`/api/cron/check-emails` which triggers it every 10 minutes), uses a local `processed.json` file to keep track of emails it has already processed. 
+**🚀 New Features:**
+*   Manual automation trigger for immediate testing without waiting for schedule
+*   Database integrity checker with comprehensive duplicate detection and cleanup
+*   Enhanced Twitter posting with multi-candidate generation and duplicate handling
+*   Improved admin panel with real-time status updates and detailed feedback
 
-**Limitation in Serverless Environment:**
-Due to the ephemeral (temporary) filesystem of Vercel Serverless Functions, this `processed.json` file will likely not persist reliably between cron job invocations. This means the script might re-process the same email messages multiple times.
+**📊 Performance Optimizations:**
+*   Pagination system overcomes Supabase 1000-row limitations
+*   Reduced API timeouts optimized for Railway's execution limits
+*   Enhanced AI creativity with higher temperature settings for diverse content
+*   Smart URL resolution handles redirects and shortened links
 
-**Impact:**
-- The downstream API endpoint (`/api/submit-article-url`) has its own robust duplicate check against the Supabase database, so **duplicate articles will NOT be created in your `latest_news` table.**
-- However, the email processing script itself will perform redundant work: re-connecting to Gmail, re-fetching emails it has already seen, re-parsing them, and re-submitting their URLs to the API endpoint (which will then reject them as duplicates).
-- This leads to inefficiency in the email checking step (wasted Gmail API calls, script execution time, and API calls to `/api/submit-article-url`).
+## 10. Future Considerations
 
-**Future Improvement:**
-For a more robust and efficient solution, especially if this cron job is critical, the `scripts/gmail-processor/index.js` script should be modified to store and check processed email `Message-ID`s in a persistent database (e.g., a dedicated table in Supabase) instead of the local `processed.json` file.
+*   **UI for Search Query Management:** Allow admins to add/edit/delete search queries
+*   **Image Cropping/Editing:** Basic tools to adjust AI-generated image variants
+*   **Enhanced Analytics:** Detailed metrics on automation performance and article engagement
+*   **Multi-language Support:** Expand search queries and AI processing for international sources
+
+## 11. Email Processing System
+
+**Current Implementation (Railway Deployment):**
+The email processing system now runs reliably on Railway with persistent storage and proper UID tracking:
+
+**✅ Resolved Issues:**
+*   **Persistent UID Storage**: Uses Supabase database instead of ephemeral `processed.json`
+*   **Smart Duplicate Prevention**: Client-side filtering prevents reprocessing of already-seen emails
+*   **Proper UID Advancement**: Ensures `last_email_check_uid` updates correctly after processing
+*   **Railway Compatibility**: No more serverless filesystem limitations
+
+**How It Works:**
+1. **Daily Schedule**: Runs automatically at 2:00 AM UTC as part of automation suite
+2. **Manual Trigger**: Available via admin panel for immediate testing
+3. **UID Tracking**: Maintains `last_email_check_uid` in Supabase for reliable progress tracking
+4. **Duplicate Protection**: Multiple layers prevent reprocessing and database duplicates
 
 ---
 
-This README provides a comprehensive overview of the MicroPlastics Pulse Project. 
+## 🎯 Current Production Status
+
+**\u2705 System Status: FULLY OPERATIONAL**
+
+The MicroPlastics Pulse backend is now a robust, production-ready system with:
+
+*   **\u2705 Reliable Daily Automation**: Runs every day at 2:00 AM UTC without gaps
+*   **\u2705 Comprehensive Error Handling**: Individual task failures don't crash the system
+*   **\u2705 Advanced Admin Tools**: Manual triggers, database integrity checks, real-time monitoring
+*   **\u2705 Scalable Architecture**: Railway deployment with persistent processes
+*   **\u2705 Database Integrity**: Automated duplicate detection and cleanup tools
+*   **\u2705 Enhanced AI Integration**: Multi-candidate generation with smart duplicate handling
+
+**Recent Success**: Automation suite completed successfully with final status: SUCCESS
+
+**Next Scheduled Run**: Daily at 2:00 AM UTC  
+**Manual Testing**: Available via admin panel automation triggers  
+**Monitoring**: Railway logs + admin panel status updates
+
+---
+
+This README provides a comprehensive overview of the MicroPlastics Pulse Project backend system. 
