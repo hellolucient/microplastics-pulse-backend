@@ -581,6 +581,101 @@ cron.schedule(cronSchedule, () => {
     runScheduledTasks();
 });
 
+app.post('/api/admin/check-duplicates', async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database client not available.' });
+  
+  try {
+    console.log('[API] Starting duplicate URL check...');
+    
+    // Get total count
+    const { count, error: countError } = await supabase
+      .from('latest_news')
+      .select('*', { count: 'exact', head: true });
+      
+    if (countError) {
+      console.error('[API] Error getting count:', countError.message);
+      return res.status(500).json({ error: 'Failed to get record count.', details: countError.message });
+    }
+    
+    // Fetch all URLs using pagination
+    let allUrls = [];
+    const pageSize = 1000;
+    let page = 0;
+    
+    while (true) {
+      const { data: pageData, error } = await supabase
+        .from('latest_news')
+        .select('id, url, processed_at, title')
+        .order('processed_at', { ascending: true })
+        .range(page * pageSize, (page + 1) * pageSize - 1);
+        
+      if (error) {
+        console.error('[API] Error fetching URLs:', error.message);
+        return res.status(500).json({ error: 'Failed to fetch URLs.', details: error.message });
+      }
+      
+      if (!pageData || pageData.length === 0) break;
+      
+      allUrls.push(...pageData);
+      
+      if (pageData.length < pageSize) break; // Last page
+      page++;
+    }
+    
+    console.log(`[API] Fetched ${allUrls.length} URLs for duplicate analysis`);
+    
+    // Check for duplicates
+    const urlMap = new Map();
+    const duplicates = [];
+    
+    for (const record of allUrls) {
+      const url = record.url;
+      if (urlMap.has(url)) {
+        const original = urlMap.get(url);
+        duplicates.push({
+          url: url,
+          original: original,
+          duplicate: record
+        });
+      } else {
+        urlMap.set(url, record);
+      }
+    }
+    
+    // Group duplicates by URL for detailed analysis
+    const duplicateGroups = new Map();
+    for (const dup of duplicates) {
+      const url = dup.url;
+      if (!duplicateGroups.has(url)) {
+        duplicateGroups.set(url, []);
+      }
+      duplicateGroups.get(url).push(dup);
+    }
+    
+    // Prepare response
+    const result = {
+      totalRecords: allUrls.length,
+      databaseCount: count,
+      uniqueUrls: urlMap.size,
+      duplicateUrls: duplicates.length,
+      duplicatePercentage: ((duplicates.length / allUrls.length) * 100).toFixed(2),
+      duplicateGroups: Array.from(duplicateGroups.entries()).map(([url, dups]) => ({
+        url: url.substring(0, 100) + (url.length > 100 ? '...' : ''),
+        occurrences: dups.length + 1,
+        originalId: urlMap.get(url).id,
+        duplicateIds: dups.map(d => d.duplicate.id)
+      })).sort((a, b) => b.occurrences - a.occurrences).slice(0, 10) // Top 10 most duplicated
+    };
+    
+    console.log(`[API] Duplicate check complete: ${duplicates.length} duplicates found`);
+    res.status(200).json(result);
+    
+  } catch (error) {
+    console.error('[API] Error during duplicate check:', error.message);
+    res.status(500).json({ error: 'Failed to check duplicates.', details: error.message });
+  }
+});
+
 // Immediately run tasks on startup for testing in dev environments
 if (process.env.NODE_ENV !== 'production') {
   // ... existing code ...
