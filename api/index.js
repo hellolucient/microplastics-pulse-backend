@@ -579,11 +579,13 @@ const cronSchedule = process.env.CRON_SCHEDULE || '0 2 * * *';
 console.log(`[Scheduler] Setting up cron job with schedule: "${cronSchedule}"`);
 console.log(`[Scheduler] This translates to: ${cronSchedule === '0 2 * * *' ? 'Daily at 2:00 AM UTC' : 'Custom schedule'}`);
 
-cron.schedule(cronSchedule, async () => {
+// Add cron job health monitoring
+const cronJob = cron.schedule(cronSchedule, async () => {
     console.log('[Scheduler] Triggering scheduled tasks due to schedule.');
+    console.log(`[Scheduler] Current UTC time at trigger: ${new Date().toISOString()}`);
     try {
-        await runScheduledTasks();
-        console.log('[Scheduler] Scheduled tasks completed successfully.');
+        const result = await runScheduledTasks();
+        console.log(`[Scheduler] Scheduled tasks completed with status: ${result.status}`);
     } catch (error) {
         console.error('[Scheduler] CRITICAL ERROR during scheduled tasks:', error);
         // Continue running - don't crash the server
@@ -597,20 +599,43 @@ cron.schedule(cronSchedule, async () => {
 console.log('[Scheduler] Cron job initialized successfully.');
 console.log(`[Scheduler] Current UTC time: ${new Date().toISOString()}`);
 console.log(`[Scheduler] Next scheduled run will be determined by: "${cronSchedule}"`);
+console.log(`[Scheduler] Cron job running status: ${cronJob.running ? 'RUNNING' : 'STOPPED'}`);
+
+// Add a health check endpoint to verify cron job status
+app.get('/api/admin/cron-status', (req, res) => {
+    const now = new Date();
+    const nextRun = cronJob.nextDates();
+    res.json({
+        currentTime: now.toISOString(),
+        cronSchedule: cronSchedule,
+        cronJobRunning: cronJob.running,
+        nextScheduledRun: nextRun ? nextRun.toISOString() : 'Unable to determine',
+        serverUptime: process.uptime(),
+        timezone: 'UTC'
+    });
+});
 
 // Add manual trigger endpoint for testing
 app.post('/api/admin/trigger-automation', async (req, res) => {
     try {
         console.log('[Admin] Manual automation trigger requested.');
-        await runScheduledTasks();
-        res.status(200).json({ 
-            message: 'Automation tasks completed successfully.',
+        const result = await runScheduledTasks();
+        
+        // runScheduledTasks now returns the final status and report
+        const statusCode = result.status === 'SUCCESS' ? 200 : 207; // 207 = Multi-Status (partial success)
+        
+        res.status(statusCode).json({ 
+            message: result.status === 'SUCCESS' 
+                ? 'Automation tasks completed successfully.' 
+                : 'Automation tasks completed with some issues.',
+            status: result.status,
+            details: result.report,
             timestamp: new Date().toISOString()
         });
     } catch (error) {
         console.error('[Admin] Error during manual automation trigger:', error);
         res.status(500).json({ 
-            error: 'Automation tasks failed.',
+            error: 'Automation tasks failed completely.',
             details: error.message,
             timestamp: new Date().toISOString()
         });
