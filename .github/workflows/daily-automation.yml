@@ -1,0 +1,52 @@
+name: Daily Automation Trigger
+
+on:
+  schedule:
+    # Run at 01:57 UTC daily (3 minutes before internal cron to wake up Railway)
+    - cron: '57 1 * * *'
+  workflow_dispatch: # Allow manual triggering for testing
+
+jobs:
+  trigger-automation:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Wake up Railway and trigger automation
+      run: |
+        echo "🚀 Triggering daily automation at $(date -u)"
+        echo "This will wake up Railway and run the full automation suite"
+        
+        # Call the automation endpoint
+        response=$(curl -s -w "\n%{http_code}" \
+          -X POST \
+          -H "Content-Type: application/json" \
+          https://microplastics-pulse-backend-production.up.railway.app/api/admin/trigger-automation)
+        
+        # Extract response body and status code
+        http_code=$(echo "$response" | tail -n1)
+        response_body=$(echo "$response" | head -n -1)
+        
+        echo "📋 Response Status: $http_code"
+        echo "📋 Response Body: $response_body"
+        
+        # Check if successful (200 = full success, 207 = partial success)
+        if [ "$http_code" -eq 200 ] || [ "$http_code" -eq 207 ]; then
+          echo "✅ Automation completed successfully!"
+          
+          # Parse and display results if possible
+          if echo "$response_body" | jq -e . >/dev/null 2>&1; then
+            echo "📊 Automation Details:"
+            echo "$response_body" | jq -r '.details | to_entries[] | "  \(.key): \(.value.status) - \(.value.details)"' 2>/dev/null || echo "  (Could not parse details)"
+          fi
+        else
+          echo "❌ Automation failed with status $http_code"
+          echo "Response: $response_body"
+          exit 1
+        fi
+
+    - name: Summary
+      run: |
+        echo "🎯 Daily automation trigger completed"
+        echo "⏰ Triggered at: $(date -u)"
+        echo "🔗 Backend URL: https://microplastics-pulse-backend-production.up.railway.app"
+        echo "📱 Admin Panel: https://microplastics-pulse-frontend.vercel.app/admin"
