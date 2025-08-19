@@ -604,14 +604,22 @@ console.log(`[Scheduler] Cron job running status: ${cronJob.running ? 'RUNNING' 
 // Add a health check endpoint to verify cron job status
 app.get('/api/admin/cron-status', (req, res) => {
     const now = new Date();
-    const nextRun = cronJob.nextDates();
+    
+    // Calculate next run time manually for '0 2 * * *' (2 AM UTC daily)
+    const nextRun = new Date(now);
+    nextRun.setUTCHours(2, 0, 0, 0); // Set to 2:00 AM UTC
+    if (nextRun <= now) {
+        nextRun.setUTCDate(nextRun.getUTCDate() + 1); // If 2 AM has passed today, set to tomorrow
+    }
+    
     res.json({
         currentTime: now.toISOString(),
         cronSchedule: cronSchedule,
         cronJobRunning: cronJob.running,
-        nextScheduledRun: nextRun ? nextRun.toISOString() : 'Unable to determine',
+        nextScheduledRun: nextRun.toISOString(),
         serverUptime: process.uptime(),
-        timezone: 'UTC'
+        timezone: 'UTC',
+        appSleepingWarning: 'Railway may put service to sleep after 10min inactivity - cron jobs will not run while sleeping'
     });
 });
 
