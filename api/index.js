@@ -615,7 +615,7 @@ app.get('/api/admin/cron-status', (req, res) => {
     res.json({
         currentTime: now.toISOString(),
         cronSchedule: cronSchedule,
-        cronJobRunning: cronJob.running,
+        cronJobRunning: cronJob ? cronJob.running : false,
         nextScheduledRun: nextRun.toISOString(),
         serverUptime: process.uptime(),
         timezone: 'UTC',
