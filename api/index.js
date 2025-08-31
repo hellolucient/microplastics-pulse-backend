@@ -570,6 +570,10 @@ app.post('/api/admin/check-emails', async (req, res) => {
   }
 });
 
+// --- Email Collection Endpoint ---
+// REMOVED: This endpoint was using the wrong table (subscribers)
+// The correct endpoint is now in the main backend (index.js) using whitepaper_leads table
+
 // Determine the cron schedule from environment variables, with a sensible daily default.
 // Default '0 2 * * *' runs once daily at 2:00 AM UTC (good for automation)
 // Alternative: '0 0 * * *' for midnight UTC

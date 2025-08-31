@@ -79,28 +79,42 @@ app.post('/api/add-news', async (req, res) => {
     // We search for the URL itself to get Google's indexed title/snippet
     const searchResults = await fetchArticlesFromGoogle(url, 1); 
 
-    if (!searchResults || searchResults.length === 0 || !searchResults[0].link.includes(url)) {
-        // If Google didn't return the exact URL we searched for, we can't proceed reliably
+    if (!searchResults || searchResults.length === 0) {
         console.warn(`Could not reliably fetch metadata for ${url} via Google Search.`);
-        // Optional: Save anyway with null summary/category, or return error?
-        // Let's return an error for now, requiring metadata for AI processing.
-         return res.status(404).json({ error: 'Could not retrieve article metadata via Google Search.' });
+        return res.status(404).json({ error: 'Could not retrieve article metadata via Google Search.' });
     }
 
     const articleData = searchResults[0]; // { title, link, snippet }
-    console.log(`Retrieved metadata: Title - ${articleData.title}`);
+    console.log(`Retrieved metadata: Title - ${articleData.title}, Link: ${articleData.link}`);
+
+    // Extract the real article URL from Google's response
+    let realArticleUrl = articleData.link;
+    
+    // Handle Google Share URLs - extract the actual article URL
+    if (articleData.link.includes('google.com/share') || articleData.link.includes('google.com/url')) {
+        try {
+            // Try to extract the real URL from Google Share links
+            const urlMatch = articleData.link.match(/[?&]url=([^&]+)/);
+            if (urlMatch) {
+                realArticleUrl = decodeURIComponent(urlMatch[1]);
+                console.log(`Extracted real URL from Google Share: ${realArticleUrl}`);
+            }
+        } catch (error) {
+            console.warn('Failed to extract real URL from Google Share link, using original:', error.message);
+        }
+    }
 
     // 3. Process with OpenAI
     const ai_summary = await summarizeText(articleData.title, articleData.snippet);
 
     // 4. Save to Supabase
     const newItem = {
-      url: url, // Use the original submitted URL
+      url: realArticleUrl, // Use the real article URL, not the submitted URL
       title: articleData.title,
       ai_summary: ai_summary,
-      source: new URL(url).hostname, // Extract hostname as source
+      source: new URL(realArticleUrl).hostname, // Extract hostname from real URL
       processed_at: new Date().toISOString(),
-      // published_date would ideally come from Google Search or scraping, add later if possible
+      // published_date could be added here if fetchArticlesFromGoogle provides it
     };
 
     console.log('Attempting to insert new item into Supabase:', JSON.stringify(newItem, null, 2)); 
@@ -622,6 +636,78 @@ cron.schedule('0 9,15,21 * * *', async () => {
   timezone: "UTC"
 });
 */
+
+// --- Email Collection Endpoint ---
+app.post('/api/collect-email', async (req, res) => {
+  console.log("[API] Received email collection request");
+  
+  const { email, source = 'whitepaper_download' } = req.body;
+  
+  if (!email || !email.includes('@')) {
+    return res.status(400).json({
+      error: 'Invalid email address',
+      details: 'Please provide a valid email address.'
+    });
+  }
+
+  try {
+    // Check if email already exists in whitepaper_leads table
+    const { data: existing, error: checkError } = await supabase
+      .from('whitepaper_leads')
+      .select('id, created_at')
+      .eq('email', email.toLowerCase())
+      .maybeSingle();
+
+    if (checkError) {
+      console.error("[API] Error checking for existing email:", checkError.message);
+      return res.status(500).json({
+        error: 'Database error',
+        details: 'Unable to process request at this time.'
+      });
+    }
+
+    if (existing) {
+      console.log(`[API] Email already exists in whitepaper_leads: ${email}`);
+      return res.status(200).json({
+        message: 'Email already registered',
+        isNewSubscriber: false,
+        subscriberId: existing.id
+      });
+    }
+
+    // Insert new email into whitepaper_leads table
+    const { data: newLead, error: insertError } = await supabase
+      .from('whitepaper_leads')
+      .insert({
+        email: email.toLowerCase(),
+        created_at: new Date().toISOString()
+      })
+      .select('id')
+      .single();
+
+    if (insertError) {
+      console.error("[API] Error inserting new email:", insertError.message);
+      return res.status(500).json({
+        error: 'Email registration failed',
+        details: 'Unable to save email at this time.'
+      });
+    }
+
+    console.log(`[API] New email added to whitepaper_leads: ${email} (ID: ${newLead.id})`);
+    return res.status(201).json({
+      message: 'Email collected successfully',
+      isNewSubscriber: true,
+      subscriberId: newLead.id
+    });
+
+  } catch (error) {
+    console.error("[API] Unexpected error during email collection:", error);
+    return res.status(500).json({
+      error: 'Server error',
+      details: 'An unexpected error occurred. Please try again.'
+    });
+  }
+});
 
 // --- Server Initialization ---
 app.listen(port, () => {

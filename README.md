@@ -87,7 +87,8 @@ The project is organized into two main repositories, typically managed within a 
 The backend exposes several key API endpoints under the `/api` path:
 
 *   `GET /latest-news`: Fetches the list of processed news articles for the public feed.
-*   `POST /add-news`: Allows manual submission of a new article URL for processing.
+*   `POST /add-news`: Allows manual submission of a new article URL for processing. Now includes enhanced Google Share URL handling to extract real article URLs.
+*   `POST /api/collect-email`: **NEW** - Collects email addresses for whitepaper downloads and stores them in the `whitepaper_leads` table.
 *   `POST /trigger-fetch`: (Used by Admin Panel) Triggers the processing of a single search query by its index.
 *   `POST /admin/trigger-automation`: **NEW** - Manually run the full automation suite (Google + Email + Twitter)
 *   `POST /admin/check-duplicates`: **NEW** - Database integrity checker with comprehensive duplicate detection
@@ -136,7 +137,27 @@ To set up and run the project locally, you'll generally need to:
 *   **Error Handling**: Individual task failures don't stop the automation suite
 *   **Manual Testing**: Admin panel provides "Run Full Automation Suite" button
 
-## 9. Recent Improvements (August 2024)
+## 9. Recent Improvements (August 2025)
+
+**🔧 URL Processing Enhancements:**
+*   **Google Share URL Handling**: Automatic extraction of real URLs from Google Share links (`share.google/...` format)
+*   **Source Domain Extraction**: Clean domain names for better source attribution (e.g., "nature.com" instead of "google.com")
+*   **Email URL Processing**: Proper handling of `share.google/...` URLs from email submissions
+*   **Enhanced `/api/add-news`**: Now extracts real article URLs before storing in database
+
+**📧 Email Collection System:**
+*   **New `/api/collect-email` Endpoint**: Collects email addresses for whitepaper downloads
+*   **Database Integration**: Stores emails in dedicated `whitepaper_leads` table
+*   **Duplicate Prevention**: Checks for existing emails before insertion
+*   **Frontend Integration**: Modal-based email collection with validation
+
+**🎨 Frontend Integration:**
+*   **News Carousel**: Auto-playing carousel with whitepaper download integration
+*   **Email Collection Modal**: Mandatory email collection before whitepaper downloads
+*   **Improved Source Display**: Clean domain extraction and better date formatting
+*   **HTML Tag Cleaning**: Automatic removal of HTML tags from titles and summaries
+
+## 10. Previous Improvements (August 2024)
 
 **🔧 Reliability Fixes:**
 *   Fixed 4-day scheduling gaps by correcting Railway deployment configuration
@@ -156,14 +177,14 @@ To set up and run the project locally, you'll generally need to:
 *   Enhanced AI creativity with higher temperature settings for diverse content
 *   Smart URL resolution handles redirects and shortened links
 
-## 10. Future Considerations
+## 11. Future Considerations
 
 *   **UI for Search Query Management:** Allow admins to add/edit/delete search queries
 *   **Image Cropping/Editing:** Basic tools to adjust AI-generated image variants
 *   **Enhanced Analytics:** Detailed metrics on automation performance and article engagement
 *   **Multi-language Support:** Expand search queries and AI processing for international sources
 
-## 11. Email Processing System
+## 12. Email Processing System
 
 **Current Implementation (Railway Deployment):**
 The email processing system now runs reliably on Railway with persistent storage and proper UID tracking:
