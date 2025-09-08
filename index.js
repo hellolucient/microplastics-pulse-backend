@@ -738,4 +738,4 @@ app.listen(port, () => {
 //   // }
 // }
 
-// Other helper functions: fetchFromGoogleNews, filterExistingArticles, summarizeWithOpenAI, etc.
+// Other helper functions: fetchFromGoogleNews, filterExistingArticles, summarizeWithOpenAI, etc.// Trigger redeploy Mon Sep  8 10:11:16 +07 2025
