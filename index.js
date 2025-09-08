@@ -909,6 +909,81 @@ app.post('/api/regenerate-image', async (req, res) => {
   }
 });
 
+// --- Find Missing Summaries Endpoint ---
+app.get('/api/find-missing-summaries', async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database client not available.' });
+
+  try {
+    const { data: articles, error } = await supabase
+      .from('latest_news')
+      .select('id')
+      .or('ai_summary.is.null,ai_summary.eq.')
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+
+    const articleIds = articles.map(article => article.id);
+    
+    return res.status(200).json({
+      message: `Found ${articleIds.length} articles missing AI summaries`,
+      articleIds: articleIds,
+      count: articleIds.length
+    });
+
+  } catch (error) {
+    return res.status(500).json({ error: 'Internal server error.', details: error.message });
+  }
+});
+
+// --- Find Missing Images Endpoint ---
+app.get('/api/find-missing-images', async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database client not available.' });
+
+  try {
+    const { data: articles, error } = await supabase
+      .from('latest_news')
+      .select('id')
+      .or('ai_image_url.is.null,ai_image_url.eq.')
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+
+    const articleIds = articles.map(article => article.id);
+    
+    return res.status(200).json({
+      message: `Found ${articleIds.length} articles missing AI images`,
+      articleIds: articleIds,
+      count: articleIds.length
+    });
+
+  } catch (error) {
+    return res.status(500).json({ error: 'Internal server error.', details: error.message });
+  }
+});
+
+// --- Get Article by ID Endpoint ---
+app.get('/api/articles/:id', async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database client not available.' });
+  const { id } = req.params;
+  if (!id) {
+    return res.status(400).json({ error: 'Article ID is required.' });
+  }
+  try {
+    const { data: article, error } = await supabase
+      .from('latest_news')
+      .select('id, title, url, ai_image_url, created_at')
+      .eq('id', id)
+      .single();
+    if (error) throw error;
+    if (!article) {
+      return res.status(404).json({ error: 'Article not found.' });
+    }
+    return res.status(200).json(article);
+  } catch (error) {
+    return res.status(500).json({ error: 'Internal server error.', details: error.message });
+  }
+});
+
 // --- Server Initialization ---
 app.listen(port, () => {
   console.log(`Backend server listening on port ${port}`);
