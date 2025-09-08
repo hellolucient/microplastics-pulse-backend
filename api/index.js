@@ -571,8 +571,76 @@ app.post('/api/admin/check-emails', async (req, res) => {
 });
 
 // --- Email Collection Endpoint ---
-// REMOVED: This endpoint was using the wrong table (subscribers)
-// The correct endpoint is now in the main backend (index.js) using whitepaper_leads table
+app.post('/api/collect-email', async (req, res) => {
+  console.log("[API] Received email collection request");
+  
+  const { email, source = 'whitepaper_download' } = req.body;
+  
+  if (!email || !email.includes('@')) {
+    return res.status(400).json({
+      error: 'Invalid email address',
+      details: 'Please provide a valid email address.'
+    });
+  }
+
+  try {
+    // Check if email already exists in whitepaper_leads table
+    const { data: existing, error: checkError } = await supabase
+      .from('whitepaper_leads')
+      .select('id, created_at')
+      .eq('email', email.toLowerCase())
+      .maybeSingle();
+
+    if (checkError) {
+      console.error("[API] Error checking for existing email:", checkError.message);
+      return res.status(500).json({
+        error: 'Database error',
+        details: 'Unable to process request at this time.'
+      });
+    }
+
+    if (existing) {
+      console.log(`[API] Email already exists in whitepaper_leads: ${email}`);
+      return res.status(200).json({
+        message: 'Email already registered',
+        isNewSubscriber: false,
+        subscriberId: existing.id
+      });
+    }
+
+    // Insert new email into whitepaper_leads table
+    const { data: newLead, error: insertError } = await supabase
+      .from('whitepaper_leads')
+      .insert({
+        email: email.toLowerCase(),
+        created_at: new Date().toISOString()
+      })
+      .select('id')
+      .single();
+
+    if (insertError) {
+      console.error("[API] Error inserting new email:", insertError.message);
+      return res.status(500).json({
+        error: 'Email registration failed',
+        details: 'Unable to save email at this time.'
+      });
+    }
+
+    console.log(`[API] New email added to whitepaper_leads: ${email} (ID: ${newLead.id})`);
+    return res.status(201).json({
+      message: 'Email collected successfully',
+      isNewSubscriber: true,
+      subscriberId: newLead.id
+    });
+
+  } catch (error) {
+    console.error("[API] Unexpected error during email collection:", error);
+    return res.status(500).json({
+      error: 'Server error',
+      details: 'An unexpected error occurred. Please try again.'
+    });
+  }
+});
 
 // Determine the cron schedule from environment variables, with a sensible daily default.
 // Default '0 2 * * *' runs once daily at 2:00 AM UTC (good for automation)
