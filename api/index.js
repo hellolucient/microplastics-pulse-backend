@@ -20,6 +20,9 @@ const {
   generateAndStoreImage
 } = require('../lib/coreLogic');
 
+// Add chat routes
+const chatRoutes = require('./admin/chat');
+
 const app = express();
 
 // --- Middleware ---
@@ -49,6 +52,9 @@ app.use(cors({
 
 // --- API Endpoints ---
 app.get('/api', (req, res) => res.send('Microplastics Pulse Backend API is running!'));
+
+// Add chat routes
+app.use('/api/admin/chat', chatRoutes);
 
 app.post('/api/add-news', async (req, res) => {
     // Check database availability

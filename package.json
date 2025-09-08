@@ -14,6 +14,7 @@
     "node": "20.x"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.61.0",
     "@supabase/supabase-js": "^2.49.4",
     "@vercel/blob": "^1.0.1",
     "axios": "^1.9.0",
@@ -27,7 +28,7 @@
     "node-cron": "^3.0.3",
     "node-fetch": "^2.6.7",
     "nodemailer": "^7.0.3",
-    "openai": "^4.97.0",
+    "openai": "^4.104.0",
     "twitter-api-v2": "1.18.1"
   }
 }
