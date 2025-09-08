@@ -487,6 +487,76 @@ app.post('/api/batch-update-stories', async (req, res) => {
   }
 });
 
+// New endpoint specifically for articles missing ai_summary
+app.post('/api/batch-generate-summaries', async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database client not available.' });
+  const { batch_size = 2, continue_token, article_ids } = req.body;
+  
+  try {
+    let query;
+    
+    // If specific article IDs provided, use those
+    if (article_ids && article_ids.length > 0) {
+      query = supabase.from('latest_news').select('*').in('id', article_ids).is('ai_summary', null);
+    } else {
+      // Otherwise, find articles without summaries
+      query = supabase.from('latest_news').select('*').is('ai_summary', null);
+      if (continue_token) {
+        query = query.gt('id', continue_token);
+      }
+      query = query.order('id', { ascending: true }).limit(batch_size);
+    }
+    
+    const { data: stories, error } = await query;
+    if (error) throw error;
+    
+    if (!stories || stories.length === 0) {
+      return res.status(200).json({ message: 'No more stories to update.', done: true });
+    }
+    
+    const results = [];
+    let lastProcessedId = null;
+    
+    for (const story of stories) {
+      lastProcessedId = story.id;
+      let updates = {};
+      let wasUpdated = false;
+      
+      // Generate AI summary using title and snippet
+      const new_ai_summary = await summarizeText(story.title, story.snippet);
+      if (new_ai_summary) {
+        updates.ai_summary = new_ai_summary;
+        updates.processed_at = new Date().toISOString();
+        wasUpdated = true;
+      }
+      
+      if (wasUpdated) {
+        const { error: updateError } = await supabase.from('latest_news').update(updates).eq('id', story.id);
+        if (updateError) {
+          results.push({ id: story.id, success: false, message: updateError.message });
+        } else {
+          results.push({ id: story.id, success: true, updates: Object.keys(updates) });
+        }
+      } else {
+        results.push({ id: story.id, success: false, message: 'Failed to generate summary' });
+      }
+      
+      // 2-second delay between articles to avoid rate limiting
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+    
+    return res.status(200).json({
+      message: `Processed ${stories.length} stories for summary generation`,
+      results,
+      continue_token: lastProcessedId,
+      done: stories.length < batch_size
+    });
+    
+  } catch (error) {
+    return res.status(500).json({ error: 'Internal server error processing batch.', details: error.message });
+  }
+});
+
 app.post('/api/regenerate-image', async (req, res) => {
   if (!supabase) return res.status(503).json({ error: 'Database client not available.' });
   const { article_id } = req.body;
@@ -504,6 +574,76 @@ app.post('/api/regenerate-image', async (req, res) => {
     return res.status(200).json({ message: `Image regenerated successfully for story ID: ${article_id}.`, new_ai_image_url });
   } catch (error) {
     return res.status(500).json({ error: 'Internal server error regenerating image.', details: error.message });
+  }
+});
+
+// Batch image generation endpoint
+app.post('/api/batch-generate-images', async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database client not available.' });
+  const { batch_size = 2, continue_token, article_ids } = req.body;
+
+  try {
+    let query;
+
+    // If specific article IDs provided, use those
+    if (article_ids && article_ids.length > 0) {
+      query = supabase.from('latest_news').select('*').in('id', article_ids).is('ai_image_url', null);
+    } else {
+      // Otherwise, find articles without images
+      query = supabase.from('latest_news').select('*').is('ai_image_url', null);
+      if (continue_token) {
+        query = query.gt('id', continue_token);
+      }
+      query = query.order('id', { ascending: true }).limit(batch_size);
+    }
+
+    const { data: stories, error } = await query;
+    if (error) throw error;
+
+    if (!stories || stories.length === 0) {
+      return res.status(200).json({ message: 'No more stories to update.', done: true });
+    }
+
+    const results = [];
+    let lastProcessedId = null;
+
+    for (const story of stories) {
+      lastProcessedId = story.id;
+      let updates = {};
+      let wasUpdated = false;
+
+      // Generate AI image
+      const new_ai_image_url = await generateAndStoreImage(story.title, story.url);
+      if (new_ai_image_url) {
+        updates.ai_image_url = new_ai_image_url;
+        updates.processed_at = new Date().toISOString();
+        wasUpdated = true;
+      }
+
+      if (wasUpdated) {
+        const { error: updateError } = await supabase.from('latest_news').update(updates).eq('id', story.id);
+        if (updateError) {
+          results.push({ id: story.id, success: false, message: updateError.message });
+        } else {
+          results.push({ id: story.id, success: true, updates: Object.keys(updates) });
+        }
+      } else {
+        results.push({ id: story.id, success: false, message: 'Failed to generate image' });
+      }
+
+      // 3-second delay between images to avoid rate limiting
+      await new Promise(resolve => setTimeout(resolve, 3000));
+    }
+
+    return res.status(200).json({
+      message: `Processed ${stories.length} stories for image generation`,
+      results,
+      continue_token: lastProcessedId,
+      done: stories.length < batch_size
+    });
+
+  } catch (error) {
+    return res.status(500).json({ error: 'Internal server error processing batch.', details: error.message });
   }
 });
 

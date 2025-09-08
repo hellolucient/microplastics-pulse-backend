@@ -53,6 +53,110 @@ router.post('/', async (req, res) => {
   }
 });
 
+// Generate embeddings endpoint with Server-Sent Events for progress
+router.post('/generate-embeddings', async (req, res) => {
+  try {
+    console.log('🚀 Starting embedding generation via API...');
+    
+    // Set up Server-Sent Events
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Headers': 'Cache-Control'
+    });
+
+    // Send initial status
+    res.write(`data: ${JSON.stringify({ type: 'start', message: 'Starting embedding generation...' })}\n\n`);
+    
+    // Get articles without embeddings
+    const { data: articles, error: fetchError } = await supabase
+      .from('latest_news')
+      .select('id, title, ai_summary')
+      .is('embedding', null)
+      .not('ai_summary', 'is', null);
+
+    if (fetchError) {
+      console.error('Error fetching articles:', fetchError);
+      res.write(`data: ${JSON.stringify({ type: 'error', error: 'Failed to fetch articles' })}\n\n`);
+      res.end();
+      return;
+    }
+
+    if (!articles || articles.length === 0) {
+      res.write(`data: ${JSON.stringify({ type: 'complete', message: 'All articles already have embeddings!', processed: 0, total: 0 })}\n\n`);
+      res.end();
+      return;
+    }
+
+    let processed = 0;
+    let errors = 0;
+    const total = articles.length;
+
+    // Send total count
+    res.write(`data: ${JSON.stringify({ type: 'total', total: total })}\n\n`);
+
+    // Process articles in batches to avoid timeout
+    const batchSize = 10;
+    const batches = [];
+    for (let i = 0; i < articles.length; i += batchSize) {
+      batches.push(articles.slice(i, i + batchSize));
+    }
+
+    for (const batch of batches) {
+      for (const article of batch) {
+        try {
+          const textToEmbed = `${article.title}\n\n${article.ai_summary}`;
+          const embedding = await generateEmbedding(textToEmbed);
+          
+          if (embedding) {
+            const { error: updateError } = await supabase
+              .from('latest_news')
+              .update({ embedding: embedding })
+              .eq('id', article.id);
+
+            if (updateError) {
+              console.error(`Error updating article ${article.id}:`, updateError);
+              errors++;
+            } else {
+              processed++;
+            }
+          } else {
+            errors++;
+          }
+
+          // Send progress update every 10 articles
+          if (processed % 10 === 0 || processed === total) {
+            const progress = Math.round((processed / total) * 100);
+            console.log(`📈 Progress: ${processed}/${total} (${progress}%)`);
+            res.write(`data: ${JSON.stringify({ type: 'progress', processed: processed, total: total, progress: progress })}\n\n`);
+          }
+
+          // Small delay to avoid rate limiting
+          await new Promise(resolve => setTimeout(resolve, 50));
+
+        } catch (error) {
+          console.error(`Error processing article ${article.id}:`, error.message);
+          console.error(`Article title: ${article.title}`);
+          console.error(`Article summary length: ${article.ai_summary?.length || 0}`);
+          errors++;
+        }
+      }
+    }
+
+    // Send completion
+    res.write(`data: ${JSON.stringify({ type: 'complete', message: 'Embedding generation complete!', processed: processed, errors: errors, total: total })}\n\n`);
+    res.write('data: [DONE]\n\n');
+    res.end();
+
+  } catch (error) {
+    console.error('Embedding generation API error:', error);
+    res.write(`data: ${JSON.stringify({ type: 'error', error: 'Failed to generate embeddings' })}\n\n`);
+    res.end();
+  }
+});
+
 // General chat response
 async function generateGeneralResponse(message, model, provider, conversationHistory) {
   const systemPrompt = "You are a helpful AI assistant. Provide clear, accurate, and helpful responses.";
@@ -146,10 +250,106 @@ Please provide a comprehensive answer based on the research, and cite specific a
   }
 }
 
-// Get relevant articles for RAG
+// Generate embedding for text using OpenAI
+async function generateEmbedding(text) {
+  try {
+    if (!text || text.trim().length === 0) {
+      console.error('Empty text provided for embedding');
+      return null;
+    }
+
+    const response = await openai.embeddings.create({
+      model: "text-embedding-3-small",
+      input: text,
+    });
+    return response.data[0].embedding;
+  } catch (error) {
+    console.error('Error generating embedding:', error.message);
+    if (error.status === 429) {
+      console.error('Rate limit exceeded - waiting before retry');
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+    return null;
+  }
+}
+
+// Calculate cosine similarity between two vectors
+function cosineSimilarity(a, b) {
+  if (a.length !== b.length) return 0;
+  
+  let dotProduct = 0;
+  let normA = 0;
+  let normB = 0;
+  
+  for (let i = 0; i < a.length; i++) {
+    dotProduct += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+  
+  return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+// Get relevant articles for RAG with enhanced semantic search
 async function getRelevantArticles(query) {
   try {
-    // Simple text-based search (can be enhanced with embeddings later)
+    // Generate embedding for the query
+    const queryEmbedding = await generateEmbedding(query);
+    
+    if (!queryEmbedding) {
+      // Fallback to simple text search if embedding fails
+      return await getRelevantArticlesFallback(query);
+    }
+
+    // Get all articles with embeddings
+    const { data: articles, error } = await supabase
+      .from('latest_news')
+      .select('id, title, ai_summary, url, published_date, embedding')
+      .not('embedding', 'is', null)
+      .not('ai_summary', 'is', null);
+
+    if (error) {
+      console.error('Error fetching articles with embeddings:', error);
+      return await getRelevantArticlesFallback(query);
+    }
+
+    if (!articles || articles.length === 0) {
+      return await getRelevantArticlesFallback(query);
+    }
+
+    // Calculate similarity scores
+    const articlesWithSimilarity = articles.map(article => {
+      const similarity = cosineSimilarity(queryEmbedding, article.embedding);
+      return {
+        ...article,
+        similarity
+      };
+    });
+
+    // Sort by similarity and get top 5
+    const relevantArticles = articlesWithSimilarity
+      .sort((a, b) => b.similarity - a.similarity)
+      .slice(0, 5)
+      .filter(article => article.similarity > 0.7) // Only include articles with good similarity
+      .map(({ similarity, embedding, ...article }) => article); // Remove similarity and embedding from response
+
+    // If we have good semantic matches, return them
+    if (relevantArticles.length > 0) {
+      return relevantArticles;
+    }
+
+    // Otherwise, fallback to text search
+    return await getRelevantArticlesFallback(query);
+
+  } catch (error) {
+    console.error('Error in enhanced article retrieval:', error);
+    return await getRelevantArticlesFallback(query);
+  }
+}
+
+// Fallback to simple text-based search
+async function getRelevantArticlesFallback(query) {
+  try {
     const searchTerms = query.toLowerCase().split(' ').filter(term => term.length > 2);
     
     if (searchTerms.length === 0) {
@@ -188,7 +388,7 @@ async function getRelevantArticles(query) {
 
     return data;
   } catch (error) {
-    console.error('Error fetching relevant articles:', error);
+    console.error('Error in fallback article retrieval:', error);
     return [];
   }
 }

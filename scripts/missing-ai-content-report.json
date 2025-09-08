@@ -1,0 +1,65 @@
+{
+  "summary": {
+    "total": 1000,
+    "hasBoth": 988,
+    "missingBoth": 0,
+    "missingSummaryOnly": 11,
+    "missingImageOnly": 1,
+    "totalMissing": 12
+  },
+  "articles": {
+    "missingBoth": [],
+    "missingSummaryOnly": [
+      {
+        "id": "450aed74-2234-4e8e-aa5d-e80c34d115cd",
+        "title": "Assessing causal relationships between gut microbiota and ..."
+      },
+      {
+        "id": "673c2fba-0f0d-4804-8355-26be50555a75",
+        "title": "Bisphenol-A disrupts mitochondrial functionality leading to ..."
+      },
+      {
+        "id": "54493983-08fd-4f76-8b14-8c55dc444364",
+        "title": "Microplastics in gentoo penguins from the Antarctic region ..."
+      },
+      {
+        "id": "84a7a753-cebd-4f99-8945-463e29d00ce3",
+        "title": "Assessing microplastic contamination in milk and dairy products ..."
+      },
+      {
+        "id": "a6b42077-964a-4b72-ab1a-04dccaf63dd9",
+        "title": "Microplastics in the digestive tract of Gryllus pennsylvanicus crickets ..."
+      },
+      {
+        "id": "87df2ba6-044a-41e3-b325-23b90a90582a",
+        "title": "Untitled"
+      },
+      {
+        "id": "dac8c841-9ef2-43dd-b9f2-7bec4be3e7ab",
+        "title": "A novel fully biobased material composite for cosmetic packaging ..."
+      },
+      {
+        "id": "e27533d8-2e41-4a9c-b75e-6969ba3dae92",
+        "title": "Honey Risk Profile"
+      },
+      {
+        "id": "e230a0a7-ce92-40f6-b3c2-b086682d955e",
+        "title": "march (@m8rch) • Instagram photos and videos"
+      },
+      {
+        "id": "3a60a1b6-33a5-4259-b71d-b38226cfa60c",
+        "title": "Kynance Cove, Crantock, Porthcurno - we've got so many gems it's ..."
+      },
+      {
+        "id": "c00587ce-e64a-4c33-b864-c5ea78c19b8a",
+        "title": "Lorena died shortly after being born"
+      }
+    ],
+    "missingImageOnly": [
+      {
+        "id": "22745fe1-ed28-4ade-83e7-c374302bf0f3",
+        "title": "Urgent nationwide recall for popular summer food that may contain PLASTIC that could slice throats"
+      }
+    ]
+  }
+}

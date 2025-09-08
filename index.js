@@ -6,6 +6,10 @@ const { OpenAI } = require('openai');
 const axios = require('axios'); // Keep this for Google Search
 const cron = require('node-cron'); // Add this for scheduling
 const { postSingleTweet } = require('./lib/twitterService');
+const { generateAndStoreImage } = require('./lib/coreLogic');
+
+// Add chat routes
+const chatRoutes = require('./api/admin/chat');
 
 const app = express();
 const port = process.env.PORT || 3001; // Use environment variable for port or default
@@ -42,6 +46,9 @@ console.log('OpenAI client initialized.');
 app.get('/', (req, res) => {
   res.send('Microplastics Pulse Backend is running!');
 });
+
+// Add chat routes
+app.use('/api/admin/chat', chatRoutes);
 
 /**
  * Endpoint to manually add a single news article URL.
@@ -555,7 +562,7 @@ async function fetchArticlesFromGoogle(query, numResults = 10) {
  * @returns {Promise<string>} The AI-generated summary.
  */
 async function summarizeText(title, snippet) {
-  if (!title || !snippet) return null;
+  if (!title) return null;
   const prompt = `Generate a detailed summary of the article titled "${title}" with the provided snippet: "${snippet}". The summary should be comprehensive, approximately 6-8 sentences long (around 150-200 words). It must capture the main topics and key findings. Crucially, ensure the summary includes specific examples, important terms, likely key search terms, mentions of product types (e.g., water bottles, food packaging), and relevant category mentions (e.g., health impacts, environmental sources) if present in the article. The primary goal is to provide enough detail to significantly improve searchability for these specific keywords and concepts within the article's content. Respond with only the summary.`;
   try {
     console.log(`Requesting detailed summary for: "${title}"`);
@@ -706,6 +713,199 @@ app.post('/api/collect-email', async (req, res) => {
       error: 'Server error',
       details: 'An unexpected error occurred. Please try again.'
     });
+  }
+});
+
+// --- Batch Summary Generation Endpoint ---
+app.post('/api/batch-generate-summaries', async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database client not available.' });
+  const { batch_size = 2, continue_token, article_ids } = req.body;
+  
+  try {
+    let query;
+    
+    // If specific article IDs provided, use those
+    if (article_ids && article_ids.length > 0) {
+      query = supabase.from('latest_news').select('*').in('id', article_ids).is('ai_summary', null);
+    } else {
+      // Otherwise, find articles without summaries
+      query = supabase.from('latest_news').select('*').is('ai_summary', null);
+      if (continue_token) {
+        query = query.gt('id', continue_token);
+      }
+      query = query.order('id', { ascending: true }).limit(batch_size);
+    }
+    
+    const { data: stories, error } = await query;
+    if (error) throw error;
+    
+    if (!stories || stories.length === 0) {
+      return res.status(200).json({ message: 'No more stories to update.', done: true });
+    }
+    
+    const results = [];
+    let lastProcessedId = null;
+    
+    for (const story of stories) {
+      lastProcessedId = story.id;
+      let updates = {};
+      let wasUpdated = false;
+      
+      // Generate AI summary using title (no snippet column exists)
+      const new_ai_summary = await summarizeText(story.title, '');
+      if (new_ai_summary) {
+        updates.ai_summary = new_ai_summary;
+        updates.processed_at = new Date().toISOString();
+        wasUpdated = true;
+      }
+      
+      if (wasUpdated) {
+        const { error: updateError } = await supabase.from('latest_news').update(updates).eq('id', story.id);
+        if (updateError) {
+          results.push({ id: story.id, success: false, message: updateError.message });
+        } else {
+          results.push({ id: story.id, success: true, updates: Object.keys(updates) });
+        }
+      } else {
+        results.push({ id: story.id, success: false, message: 'Failed to generate summary' });
+      }
+      
+      // 2-second delay between articles to avoid rate limiting
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+    
+    return res.status(200).json({
+      message: `Processed ${stories.length} stories for summary generation`,
+      results,
+      continue_token: lastProcessedId,
+      done: stories.length < batch_size
+    });
+    
+  } catch (error) {
+    return res.status(500).json({ error: 'Internal server error processing batch.', details: error.message });
+  }
+});
+
+// --- Batch Image Generation Endpoint ---
+app.post('/api/batch-generate-images', async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database client not available.' });
+  const { batch_size = 2, continue_token, article_ids } = req.body;
+
+  try {
+    let query;
+
+    // If specific article IDs provided, use those
+    if (article_ids && article_ids.length > 0) {
+      query = supabase.from('latest_news').select('*').in('id', article_ids).is('ai_image_url', null);
+    } else {
+      // Otherwise, find articles without images
+      query = supabase.from('latest_news').select('*').is('ai_image_url', null);
+      if (continue_token) {
+        query = query.gt('id', continue_token);
+      }
+      query = query.order('id', { ascending: true }).limit(batch_size);
+    }
+
+    const { data: stories, error } = await query;
+    if (error) throw error;
+
+    if (!stories || stories.length === 0) {
+      return res.status(200).json({ message: 'No more stories to update.', done: true });
+    }
+
+    const results = [];
+    let lastProcessedId = null;
+
+    for (const story of stories) {
+      lastProcessedId = story.id;
+      let updates = {};
+      let wasUpdated = false;
+
+      // Generate AI image
+      const new_ai_image_url = await generateAndStoreImage(story.title, story.url);
+      if (new_ai_image_url) {
+        updates.ai_image_url = new_ai_image_url;
+        updates.processed_at = new Date().toISOString();
+        wasUpdated = true;
+      }
+
+      if (wasUpdated) {
+        const { error: updateError } = await supabase.from('latest_news').update(updates).eq('id', story.id);
+        if (updateError) {
+          results.push({ id: story.id, success: false, message: updateError.message });
+        } else {
+          results.push({ id: story.id, success: true, updates: Object.keys(updates) });
+        }
+      } else {
+        results.push({ id: story.id, success: false, message: 'Failed to generate image' });
+      }
+
+      // 3-second delay between images to avoid rate limiting
+      await new Promise(resolve => setTimeout(resolve, 3000));
+    }
+
+    return res.status(200).json({
+      message: `Processed ${stories.length} stories for image generation`,
+      results,
+      continue_token: lastProcessedId,
+      done: stories.length < batch_size
+    });
+
+  } catch (error) {
+    return res.status(500).json({ error: 'Internal server error processing batch.', details: error.message });
+  }
+});
+
+// --- Single Image Regeneration Endpoint ---
+app.post('/api/regenerate-image', async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database client not available.' });
+  
+  const { article_id } = req.body;
+  
+  if (!article_id) {
+    return res.status(400).json({ error: 'Article ID is required.' });
+  }
+
+  try {
+    // Get the article
+    const { data: article, error: fetchError } = await supabase
+      .from('latest_news')
+      .select('id, title, url')
+      .eq('id', article_id)
+      .single();
+
+    if (fetchError || !article) {
+      return res.status(404).json({ error: 'Article not found.' });
+    }
+
+    // Generate new AI image
+    const new_ai_image_url = await generateAndStoreImage(article.title, article.url);
+    
+    if (!new_ai_image_url) {
+      return res.status(500).json({ error: 'Failed to generate image.' });
+    }
+
+    // Update the article with new image URL
+    const { error: updateError } = await supabase
+      .from('latest_news')
+      .update({ 
+        ai_image_url: new_ai_image_url,
+        processed_at: new Date().toISOString()
+      })
+      .eq('id', article_id);
+
+    if (updateError) {
+      return res.status(500).json({ error: 'Failed to update article.', details: updateError.message });
+    }
+
+    return res.status(200).json({ 
+      message: 'Image regenerated successfully.',
+      article_id: article_id,
+      new_image_url: new_ai_image_url
+    });
+
+  } catch (error) {
+    return res.status(500).json({ error: 'Internal server error.', details: error.message });
   }
 });
 
