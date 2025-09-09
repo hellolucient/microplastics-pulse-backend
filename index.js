@@ -1164,24 +1164,31 @@ app.get('/api/admin/ai-usage-recent', async (req, res) => {
 // Test endpoint for AI logging
 app.post('/api/admin/test-ai-logging', async (req, res) => {
   try {
-    const { logTextGenerationUsage } = require('./lib/aiUsageLogger');
+    const { logAIUsage } = require('./lib/aiUsageLogger');
     
-    // Test logging with dummy data
-    await logTextGenerationUsage(
-      'openai',
-      'gpt-3.5-turbo',
-      'test',
-      { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30 },
-      1000,
-      true,
-      null,
-      'test-key'
-    );
+    // Test direct database insertion
+    const testData = {
+      provider: 'openai',
+      model: 'gpt-3.5-turbo',
+      operationType: 'test',
+      inputTokens: 10,
+      outputTokens: 20,
+      totalTokens: 30,
+      costUsd: 0.0001,
+      requestDurationMs: 1000,
+      success: true,
+      errorMessage: null,
+      apiKeyId: 'test-key',
+      metadata: { test: true }
+    };
     
-    res.json({ success: true, message: 'Test logging completed' });
+    console.log('Testing AI usage logging with data:', testData);
+    await logAIUsage(testData);
+    
+    res.json({ success: true, message: 'Test logging completed', data: testData });
   } catch (error) {
     console.error('Test logging error:', error);
-    res.status(500).json({ error: 'Test logging failed', details: error.message });
+    res.status(500).json({ error: 'Test logging failed', details: error.message, stack: error.stack });
   }
 });
 
