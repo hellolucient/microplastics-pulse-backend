@@ -1164,28 +1164,42 @@ app.get('/api/admin/ai-usage-recent', async (req, res) => {
 // Test endpoint for AI logging
 app.post('/api/admin/test-ai-logging', async (req, res) => {
   try {
-    const { logAIUsage } = require('./lib/aiUsageLogger');
-    
-    // Test direct database insertion
+    // Test direct database insertion without the wrapper function
     const testData = {
       provider: 'openai',
       model: 'gpt-3.5-turbo',
-      operationType: 'test',
-      inputTokens: 10,
-      outputTokens: 20,
-      totalTokens: 30,
-      costUsd: 0.0001,
-      requestDurationMs: 1000,
+      operation_type: 'test',
+      input_tokens: 10,
+      output_tokens: 20,
+      total_tokens: 30,
+      cost_usd: 0.0001,
+      request_duration_ms: 1000,
       success: true,
-      errorMessage: null,
-      apiKeyId: 'test-key',
-      metadata: { test: true }
+      error_message: null,
+      api_key_id: 'test-key',
+      metadata: JSON.stringify({ test: true }),
+      created_at: new Date().toISOString()
     };
     
-    console.log('Testing AI usage logging with data:', testData);
-    await logAIUsage(testData);
+    console.log('Testing direct database insertion with data:', testData);
     
-    res.json({ success: true, message: 'Test logging completed', data: testData });
+    const { data, error } = await supabase
+      .from('ai_usage_logs')
+      .insert(testData)
+      .select();
+    
+    if (error) {
+      console.error('Database insertion error:', error);
+      return res.status(500).json({ 
+        error: 'Database insertion failed', 
+        details: error.message,
+        code: error.code,
+        hint: error.hint
+      });
+    }
+    
+    console.log('Database insertion successful:', data);
+    res.json({ success: true, message: 'Test logging completed', data: data });
   } catch (error) {
     console.error('Test logging error:', error);
     res.status(500).json({ error: 'Test logging failed', details: error.message, stack: error.stack });
