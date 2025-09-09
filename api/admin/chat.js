@@ -2,6 +2,7 @@ const express = require('express');
 const OpenAI = require('openai');
 const Anthropic = require('@anthropic-ai/sdk');
 const { createClient } = require('@supabase/supabase-js');
+const { logTextGenerationUsage } = require('../../lib/aiUsageLogger');
 
 const router = express.Router();
 
@@ -160,6 +161,7 @@ router.post('/generate-embeddings', async (req, res) => {
 // General chat response
 async function generateGeneralResponse(message, model, provider, conversationHistory) {
   const systemPrompt = "You are a helpful AI assistant. Provide clear, accurate, and helpful responses.";
+  const startTime = Date.now();
   
   if (provider === 'openai') {
     const messages = [
@@ -168,14 +170,46 @@ async function generateGeneralResponse(message, model, provider, conversationHis
       { role: 'user', content: message }
     ];
 
-    const completion = await openai.chat.completions.create({
-      model: model,
-      messages: messages,
-      max_tokens: 1000,
-      temperature: 0.7
-    });
+    try {
+      const completion = await openai.chat.completions.create({
+        model: model,
+        messages: messages,
+        max_tokens: 1000,
+        temperature: 0.7
+      });
 
-    return completion.choices[0].message.content;
+      const duration = Date.now() - startTime;
+      
+      // Log usage
+      await logTextGenerationUsage(
+        'openai',
+        model,
+        'chat_general',
+        completion.usage,
+        duration,
+        true,
+        null,
+        process.env.OPENAI_API_KEY?.slice(-8)
+      );
+
+      return completion.choices[0].message.content;
+    } catch (error) {
+      const duration = Date.now() - startTime;
+      
+      // Log failed usage
+      await logTextGenerationUsage(
+        'openai',
+        model,
+        'chat_general',
+        { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+        duration,
+        false,
+        error,
+        process.env.OPENAI_API_KEY?.slice(-8)
+      );
+      
+      throw error;
+    }
   } 
   else if (provider === 'anthropic') {
     const messages = conversationHistory.slice(-10).map(msg => ({
@@ -183,17 +217,50 @@ async function generateGeneralResponse(message, model, provider, conversationHis
       content: msg.content
     }));
 
-    const response = await anthropic.messages.create({
-      model: model,
-      max_tokens: 1000,
-      system: systemPrompt,
-      messages: [
-        ...messages,
-        { role: 'user', content: message }
-      ]
-    });
+    try {
+      const response = await anthropic.messages.create({
+        model: model,
+        max_tokens: 1000,
+        system: systemPrompt,
+        messages: [
+          ...messages,
+          { role: 'user', content: message }
+        ]
+      });
 
-    return response.content[0].text;
+      const duration = Date.now() - startTime;
+      
+      // Log usage for Anthropic (they don't provide usage in response, so we estimate)
+      const estimatedTokens = Math.ceil((message.length + response.content[0].text.length) / 4);
+      await logTextGenerationUsage(
+        'anthropic',
+        model,
+        'chat_general',
+        { prompt_tokens: Math.ceil(message.length / 4), completion_tokens: Math.ceil(response.content[0].text.length / 4), total_tokens: estimatedTokens },
+        duration,
+        true,
+        null,
+        process.env.ANTHROPIC_API_KEY?.slice(-8)
+      );
+
+      return response.content[0].text;
+    } catch (error) {
+      const duration = Date.now() - startTime;
+      
+      // Log failed usage
+      await logTextGenerationUsage(
+        'anthropic',
+        model,
+        'chat_general',
+        { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+        duration,
+        false,
+        error,
+        process.env.ANTHROPIC_API_KEY?.slice(-8)
+      );
+      
+      throw error;
+    }
   }
 }
 
@@ -214,6 +281,8 @@ ${context}
 
 Please provide a comprehensive answer based on the research, and cite specific articles when relevant. Include the source URLs for transparency.`;
 
+  const startTime = Date.now();
+
   if (provider === 'openai') {
     const messages = [
       { role: 'system', content: systemPrompt },
@@ -221,14 +290,46 @@ Please provide a comprehensive answer based on the research, and cite specific a
       { role: 'user', content: message }
     ];
 
-    const completion = await openai.chat.completions.create({
-      model: model,
-      messages: messages,
-      max_tokens: 1500,
-      temperature: 0.7
-    });
+    try {
+      const completion = await openai.chat.completions.create({
+        model: model,
+        messages: messages,
+        max_tokens: 1500,
+        temperature: 0.7
+      });
 
-    return completion.choices[0].message.content;
+      const duration = Date.now() - startTime;
+      
+      // Log usage
+      await logTextGenerationUsage(
+        'openai',
+        model,
+        'chat_research',
+        completion.usage,
+        duration,
+        true,
+        null,
+        process.env.OPENAI_API_KEY?.slice(-8)
+      );
+
+      return completion.choices[0].message.content;
+    } catch (error) {
+      const duration = Date.now() - startTime;
+      
+      // Log failed usage
+      await logTextGenerationUsage(
+        'openai',
+        model,
+        'chat_research',
+        { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+        duration,
+        false,
+        error,
+        process.env.OPENAI_API_KEY?.slice(-8)
+      );
+      
+      throw error;
+    }
   } 
   else if (provider === 'anthropic') {
     const messages = conversationHistory.slice(-10).map(msg => ({
@@ -236,17 +337,50 @@ Please provide a comprehensive answer based on the research, and cite specific a
       content: msg.content
     }));
 
-    const response = await anthropic.messages.create({
-      model: model,
-      max_tokens: 1500,
-      system: systemPrompt,
-      messages: [
-        ...messages,
-        { role: 'user', content: message }
-      ]
-    });
+    try {
+      const response = await anthropic.messages.create({
+        model: model,
+        max_tokens: 1500,
+        system: systemPrompt,
+        messages: [
+          ...messages,
+          { role: 'user', content: message }
+        ]
+      });
 
-    return response.content[0].text;
+      const duration = Date.now() - startTime;
+      
+      // Log usage for Anthropic (they don't provide usage in response, so we estimate)
+      const estimatedTokens = Math.ceil((message.length + response.content[0].text.length) / 4);
+      await logTextGenerationUsage(
+        'anthropic',
+        model,
+        'chat_research',
+        { prompt_tokens: Math.ceil(message.length / 4), completion_tokens: Math.ceil(response.content[0].text.length / 4), total_tokens: estimatedTokens },
+        duration,
+        true,
+        null,
+        process.env.ANTHROPIC_API_KEY?.slice(-8)
+      );
+
+      return response.content[0].text;
+    } catch (error) {
+      const duration = Date.now() - startTime;
+      
+      // Log failed usage
+      await logTextGenerationUsage(
+        'anthropic',
+        model,
+        'chat_research',
+        { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+        duration,
+        false,
+        error,
+        process.env.ANTHROPIC_API_KEY?.slice(-8)
+      );
+      
+      throw error;
+    }
   }
 }
 

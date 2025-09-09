@@ -7,6 +7,7 @@ const axios = require('axios'); // Keep this for Google Search
 const cron = require('node-cron'); // Add this for scheduling
 const { postSingleTweet } = require('./lib/twitterService');
 const { generateAndStoreImage } = require('./lib/coreLogic');
+const { logTextGenerationUsage } = require('./lib/aiUsageLogger');
 
 // Add chat routes
 const chatRoutes = require('./api/admin/chat');
@@ -564,6 +565,8 @@ async function fetchArticlesFromGoogle(query, numResults = 10) {
 async function summarizeText(title, snippet) {
   if (!title) return null;
   const prompt = `Generate a detailed summary of the article titled "${title}" with the provided snippet: "${snippet}". The summary should be comprehensive, approximately 6-8 sentences long (around 150-200 words). It must capture the main topics and key findings. Crucially, ensure the summary includes specific examples, important terms, likely key search terms, mentions of product types (e.g., water bottles, food packaging), and relevant category mentions (e.g., health impacts, environmental sources) if present in the article. The primary goal is to provide enough detail to significantly improve searchability for these specific keywords and concepts within the article's content. Respond with only the summary.`;
+  
+  const startTime = Date.now();
   try {
     console.log(`Requesting detailed summary for: "${title}"`);
     const completion = await openai.chat.completions.create({
@@ -573,11 +576,40 @@ async function summarizeText(title, snippet) {
       temperature: 0.5,
       n: 1,
     });
+    
+    const duration = Date.now() - startTime;
     const summary = completion.choices[0]?.message?.content?.trim();
     console.log(`Generated summary: ${summary}`);
+    
+    // Log usage
+    await logTextGenerationUsage(
+      'openai',
+      'gpt-3.5-turbo',
+      'summary',
+      completion.usage,
+      duration,
+      true,
+      null,
+      process.env.OPENAI_API_KEY?.slice(-8)
+    );
+    
     return summary || null;
   } catch (error) {
+    const duration = Date.now() - startTime;
     console.error('Error generating summary with OpenAI:', error.response ? `${error.message} - ${JSON.stringify(error.response.data)}` : error.message);
+    
+    // Log failed usage
+    await logTextGenerationUsage(
+      'openai',
+      'gpt-3.5-turbo',
+      'summary',
+      { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
+      duration,
+      false,
+      error,
+      process.env.OPENAI_API_KEY?.slice(-8)
+    );
+    
     return null;
   }
 }
@@ -981,6 +1013,157 @@ app.get('/api/articles/:id', async (req, res) => {
     return res.status(200).json(article);
   } catch (error) {
     return res.status(500).json({ error: 'Internal server error.', details: error.message });
+  }
+});
+
+// --- AI Usage Tracking Endpoints ---
+
+// Get AI usage statistics
+app.get('/api/admin/ai-usage-stats', async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database client not available.' });
+  
+  try {
+    const { timeframe = '7d', provider, model } = req.query;
+    
+    // Calculate date range
+    const now = new Date();
+    let startDate;
+    switch (timeframe) {
+      case '1d':
+        startDate = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+        break;
+      case '7d':
+        startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+        break;
+      case '30d':
+        startDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+        break;
+      case '90d':
+        startDate = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
+        break;
+      default:
+        startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    }
+    
+    // Build query
+    let query = supabase
+      .from('ai_usage_logs')
+      .select('*')
+      .gte('created_at', startDate.toISOString());
+    
+    if (provider) query = query.eq('provider', provider);
+    if (model) query = query.eq('model', model);
+    
+    const { data: logs, error } = await query;
+    if (error) throw error;
+    
+    // Calculate statistics
+    const stats = {
+      totalRequests: logs.length,
+      successfulRequests: logs.filter(log => log.success).length,
+      failedRequests: logs.filter(log => !log.success).length,
+      totalInputTokens: logs.reduce((sum, log) => sum + (log.input_tokens || 0), 0),
+      totalOutputTokens: logs.reduce((sum, log) => sum + (log.output_tokens || 0), 0),
+      totalTokens: logs.reduce((sum, log) => sum + (log.total_tokens || 0), 0),
+      totalCost: logs.reduce((sum, log) => sum + (log.cost_usd || 0), 0),
+      avgDuration: logs.length > 0 ? logs.reduce((sum, log) => sum + (log.request_duration_ms || 0), 0) / logs.length : 0,
+      providers: [...new Set(logs.map(log => log.provider))],
+      models: [...new Set(logs.map(log => log.model))],
+      operationTypes: [...new Set(logs.map(log => log.operation_type))],
+      dailyBreakdown: {},
+      hourlyBreakdown: {},
+      providerBreakdown: {},
+      modelBreakdown: {},
+      operationBreakdown: {}
+    };
+    
+    // Calculate daily breakdown
+    logs.forEach(log => {
+      const date = new Date(log.created_at).toISOString().split('T')[0];
+      if (!stats.dailyBreakdown[date]) {
+        stats.dailyBreakdown[date] = { requests: 0, cost: 0, tokens: 0 };
+      }
+      stats.dailyBreakdown[date].requests++;
+      stats.dailyBreakdown[date].cost += log.cost_usd || 0;
+      stats.dailyBreakdown[date].tokens += log.total_tokens || 0;
+    });
+    
+    // Calculate hourly breakdown
+    logs.forEach(log => {
+      const hour = new Date(log.created_at).getHours();
+      if (!stats.hourlyBreakdown[hour]) {
+        stats.hourlyBreakdown[hour] = { requests: 0, cost: 0, tokens: 0 };
+      }
+      stats.hourlyBreakdown[hour].requests++;
+      stats.hourlyBreakdown[hour].cost += log.cost_usd || 0;
+      stats.hourlyBreakdown[hour].tokens += log.total_tokens || 0;
+    });
+    
+    // Calculate provider breakdown
+    stats.providers.forEach(provider => {
+      const providerLogs = logs.filter(log => log.provider === provider);
+      const successfulLogs = providerLogs.filter(log => log.success);
+      stats.providerBreakdown[provider] = {
+        requests: providerLogs.length,
+        cost: providerLogs.reduce((sum, log) => sum + (log.cost_usd || 0), 0),
+        tokens: providerLogs.reduce((sum, log) => sum + (log.total_tokens || 0), 0),
+        successRate: providerLogs.length > 0 ? (successfulLogs.length / providerLogs.length) * 100 : 0
+      };
+    });
+    
+    // Calculate model breakdown
+    stats.models.forEach(model => {
+      const modelLogs = logs.filter(log => log.model === model);
+      stats.modelBreakdown[model] = {
+        requests: modelLogs.length,
+        cost: modelLogs.reduce((sum, log) => sum + (log.cost_usd || 0), 0),
+        tokens: modelLogs.reduce((sum, log) => sum + (log.total_tokens || 0), 0),
+        avgDuration: modelLogs.length > 0 ? modelLogs.reduce((sum, log) => sum + (log.request_duration_ms || 0), 0) / modelLogs.length : 0
+      };
+    });
+    
+    // Calculate operation breakdown
+    stats.operationTypes.forEach(operation => {
+      const operationLogs = logs.filter(log => log.operation_type === operation);
+      const successfulLogs = operationLogs.filter(log => log.success);
+      stats.operationBreakdown[operation] = {
+        requests: operationLogs.length,
+        cost: operationLogs.reduce((sum, log) => sum + (log.cost_usd || 0), 0),
+        tokens: operationLogs.reduce((sum, log) => sum + (log.total_tokens || 0), 0),
+        successRate: operationLogs.length > 0 ? (successfulLogs.length / operationLogs.length) * 100 : 0
+      };
+    });
+    
+    res.status(200).json({ success: true, data: stats });
+  } catch (error) {
+    console.error('Error fetching AI usage stats:', error);
+    res.status(500).json({ error: 'Failed to fetch usage statistics', details: error.message });
+  }
+});
+
+// Get recent AI usage
+app.get('/api/admin/ai-usage-recent', async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database client not available.' });
+  
+  try {
+    const { limit = 20, provider, model } = req.query;
+    
+    let query = supabase
+      .from('ai_usage_logs')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(parseInt(limit));
+    
+    if (provider) query = query.eq('provider', provider);
+    if (model) query = query.eq('model', model);
+    
+    const { data: logs, error } = await query;
+    if (error) throw error;
+    
+    res.status(200).json({ success: true, data: logs });
+  } catch (error) {
+    console.error('Error fetching recent AI usage:', error);
+    res.status(500).json({ error: 'Failed to fetch recent usage', details: error.message });
   }
 });
 
