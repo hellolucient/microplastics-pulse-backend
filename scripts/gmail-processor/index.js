@@ -7,7 +7,7 @@ const axios = require('axios');
 const { createClient } = require('@supabase/supabase-js'); // Added Supabase
 
 // const processedEmailsPath = path.join(__dirname, 'processed.json'); // Removed
-const approvedSenders = ['hellolucient@gmail.com', 'trent.munday@gmail.com', 'gerrybodeker@gmail.com'];
+const approvedSenders = ['hellolucient@gmail.com', 'trent.munday@gmail.com', 'gerrybodeker@gmail.com', 'gerry.bodeker@post.harvard.edu'];
 
 // --- Initialize Supabase Client ---
 const supabaseUrl = process.env.SUPABASE_URL;
