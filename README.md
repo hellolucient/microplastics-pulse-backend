@@ -4,7 +4,7 @@
 
 The MicroPlastics Pulse Project is a web application designed to aggregate, process, and display the latest news and research related to microplastics. This backend service provides a robust API with **automated daily scheduling**, **AI-powered content enhancement**, and **comprehensive administration tools**.
 
-**Current Status**: Production-ready system deployed on Railway with reliable daily automation at 2:00 AM UTC.
+**Current Status**: Production-ready system deployed on Railway with reliable daily automation at 2:00 AM UTC and AI usage tracking.
 
 ## 2. How It Works (High-Level Flow)
 
