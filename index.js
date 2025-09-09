@@ -1164,7 +1164,25 @@ app.get('/api/admin/ai-usage-recent', async (req, res) => {
 // Test endpoint for AI logging
 app.post('/api/admin/test-ai-logging', async (req, res) => {
   try {
-    // Test direct database insertion without the wrapper function
+    // First, test if we can read from the table
+    console.log('Testing database connection...');
+    const { data: existingData, error: readError } = await supabase
+      .from('ai_usage_logs')
+      .select('*')
+      .limit(5);
+    
+    if (readError) {
+      console.error('Database read error:', readError);
+      return res.status(500).json({ 
+        error: 'Database read failed', 
+        details: readError.message,
+        code: readError.code
+      });
+    }
+    
+    console.log('Database read successful. Existing records:', existingData?.length || 0);
+    
+    // Test direct database insertion
     const testData = {
       provider: 'openai',
       model: 'gpt-3.5-turbo',
@@ -1199,7 +1217,27 @@ app.post('/api/admin/test-ai-logging', async (req, res) => {
     }
     
     console.log('Database insertion successful:', data);
-    res.json({ success: true, message: 'Test logging completed', data: data });
+    
+    // Test reading the data back
+    const { data: newData, error: newReadError } = await supabase
+      .from('ai_usage_logs')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(1);
+    
+    if (newReadError) {
+      console.error('Database read after insert error:', newReadError);
+    } else {
+      console.log('Data after insertion:', newData);
+    }
+    
+    res.json({ 
+      success: true, 
+      message: 'Test logging completed', 
+      inserted: data,
+      existingCount: existingData?.length || 0,
+      newData: newData
+    });
   } catch (error) {
     console.error('Test logging error:', error);
     res.status(500).json({ error: 'Test logging failed', details: error.message, stack: error.stack });
