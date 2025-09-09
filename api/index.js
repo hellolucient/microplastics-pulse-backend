@@ -1119,6 +1119,30 @@ app.get('/api/admin/ai-usage-recent', async (req, res) => {
   }
 });
 
+// Test endpoint for AI logging
+app.post('/api/admin/test-ai-logging', async (req, res) => {
+  try {
+    const { logTextGenerationUsage } = require('../lib/aiUsageLogger');
+    
+    // Test logging with dummy data
+    await logTextGenerationUsage(
+      'openai',
+      'gpt-3.5-turbo',
+      'test',
+      { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30 },
+      1000,
+      true,
+      null,
+      'test-key'
+    );
+    
+    res.json({ success: true, message: 'Test logging completed' });
+  } catch (error) {
+    console.error('Test logging error:', error);
+    res.status(500).json({ error: 'Test logging failed', details: error.message });
+  }
+});
+
 // --- Server Initialization ---
 app.listen(process.env.PORT || 3001, () => {
     console.log(`Backend server listening on port ${process.env.PORT || 3001}`);
