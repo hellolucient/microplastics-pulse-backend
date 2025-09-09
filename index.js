@@ -7,7 +7,6 @@ const axios = require('axios'); // Keep this for Google Search
 const cron = require('node-cron'); // Add this for scheduling
 const { postSingleTweet } = require('./lib/twitterService');
 const { generateAndStoreImage } = require('./lib/coreLogic');
-const { logTextGenerationUsage } = require('./lib/aiUsageLogger');
 
 // Add chat routes
 const chatRoutes = require('./api/admin/chat');
@@ -565,8 +564,6 @@ async function fetchArticlesFromGoogle(query, numResults = 10) {
 async function summarizeText(title, snippet) {
   if (!title) return null;
   const prompt = `Generate a detailed summary of the article titled "${title}" with the provided snippet: "${snippet}". The summary should be comprehensive, approximately 6-8 sentences long (around 150-200 words). It must capture the main topics and key findings. Crucially, ensure the summary includes specific examples, important terms, likely key search terms, mentions of product types (e.g., water bottles, food packaging), and relevant category mentions (e.g., health impacts, environmental sources) if present in the article. The primary goal is to provide enough detail to significantly improve searchability for these specific keywords and concepts within the article's content. Respond with only the summary.`;
-  
-  const startTime = Date.now();
   try {
     console.log(`Requesting detailed summary for: "${title}"`);
     const completion = await openai.chat.completions.create({
@@ -576,40 +573,11 @@ async function summarizeText(title, snippet) {
       temperature: 0.5,
       n: 1,
     });
-    
-    const duration = Date.now() - startTime;
     const summary = completion.choices[0]?.message?.content?.trim();
     console.log(`Generated summary: ${summary}`);
-    
-    // Log usage
-    await logTextGenerationUsage(
-      'openai',
-      'gpt-3.5-turbo',
-      'summary',
-      completion.usage,
-      duration,
-      true,
-      null,
-      process.env.OPENAI_API_KEY?.slice(-8)
-    );
-    
     return summary || null;
   } catch (error) {
-    const duration = Date.now() - startTime;
     console.error('Error generating summary with OpenAI:', error.response ? `${error.message} - ${JSON.stringify(error.response.data)}` : error.message);
-    
-    // Log failed usage
-    await logTextGenerationUsage(
-      'openai',
-      'gpt-3.5-turbo',
-      'summary',
-      { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
-      duration,
-      false,
-      error,
-      process.env.OPENAI_API_KEY?.slice(-8)
-    );
-    
     return null;
   }
 }
@@ -1016,6 +984,37 @@ app.get('/api/articles/:id', async (req, res) => {
   }
 });
 
+// --- Server Initialization ---
+app.listen(port, () => {
+  console.log(`Backend server listening on port ${port}`);
+});
+
+// --- Helper Functions (Example Structure) ---
+// async function fetchNewsAndProcess() {
+//   try {
+//     // 1. Fetch from Google News API
+//     // const articles = await fetchFromGoogleNews();
+//     
+//     // 2. Filter out existing articles (check Supabase)
+//     // const newArticles = await filterExistingArticles(articles);
+//     
+//     // 3. For each new article:
+//     // for (const article of newArticles) {
+//     //   //  a. Fetch content (carefully - maybe just use API summary if available)
+//     //   //  b. Summarize with OpenAI
+//     //   //  c. Categorize with OpenAI
+//     //   //  d. Store in Supabase
+//     // }
+// 
+//     // console.log('News processing complete.');
+// 
+//   // } catch (error) {
+//   //   console.error('Error during scheduled news fetch:', error);
+//   // }
+// }
+
+// Other helper functions: fetchFromGoogleNews, filterExistingArticles, summarizeWithOpenAI, etc.
+
 // --- AI Usage Tracking Endpoints ---
 
 // Get AI usage statistics
@@ -1100,44 +1099,39 @@ app.get('/api/admin/ai-usage-stats', async (req, res) => {
     });
     
     // Calculate provider breakdown
-    stats.providers.forEach(provider => {
-      const providerLogs = logs.filter(log => log.provider === provider);
-      const successfulLogs = providerLogs.filter(log => log.success);
-      stats.providerBreakdown[provider] = {
-        requests: providerLogs.length,
-        cost: providerLogs.reduce((sum, log) => sum + (log.cost_usd || 0), 0),
-        tokens: providerLogs.reduce((sum, log) => sum + (log.total_tokens || 0), 0),
-        successRate: providerLogs.length > 0 ? (successfulLogs.length / providerLogs.length) * 100 : 0
-      };
+    logs.forEach(log => {
+      if (!stats.providerBreakdown[log.provider]) {
+        stats.providerBreakdown[log.provider] = { requests: 0, cost: 0, tokens: 0 };
+      }
+      stats.providerBreakdown[log.provider].requests++;
+      stats.providerBreakdown[log.provider].cost += log.cost_usd || 0;
+      stats.providerBreakdown[log.provider].tokens += log.total_tokens || 0;
     });
     
     // Calculate model breakdown
-    stats.models.forEach(model => {
-      const modelLogs = logs.filter(log => log.model === model);
-      stats.modelBreakdown[model] = {
-        requests: modelLogs.length,
-        cost: modelLogs.reduce((sum, log) => sum + (log.cost_usd || 0), 0),
-        tokens: modelLogs.reduce((sum, log) => sum + (log.total_tokens || 0), 0),
-        avgDuration: modelLogs.length > 0 ? modelLogs.reduce((sum, log) => sum + (log.request_duration_ms || 0), 0) / modelLogs.length : 0
-      };
+    logs.forEach(log => {
+      if (!stats.modelBreakdown[log.model]) {
+        stats.modelBreakdown[log.model] = { requests: 0, cost: 0, tokens: 0 };
+      }
+      stats.modelBreakdown[log.model].requests++;
+      stats.modelBreakdown[log.model].cost += log.cost_usd || 0;
+      stats.modelBreakdown[log.model].tokens += log.total_tokens || 0;
     });
     
     // Calculate operation breakdown
-    stats.operationTypes.forEach(operation => {
-      const operationLogs = logs.filter(log => log.operation_type === operation);
-      const successfulLogs = operationLogs.filter(log => log.success);
-      stats.operationBreakdown[operation] = {
-        requests: operationLogs.length,
-        cost: operationLogs.reduce((sum, log) => sum + (log.cost_usd || 0), 0),
-        tokens: operationLogs.reduce((sum, log) => sum + (log.total_tokens || 0), 0),
-        successRate: operationLogs.length > 0 ? (successfulLogs.length / operationLogs.length) * 100 : 0
-      };
+    logs.forEach(log => {
+      if (!stats.operationBreakdown[log.operation_type]) {
+        stats.operationBreakdown[log.operation_type] = { requests: 0, cost: 0, tokens: 0 };
+      }
+      stats.operationBreakdown[log.operation_type].requests++;
+      stats.operationBreakdown[log.operation_type].cost += log.cost_usd || 0;
+      stats.operationBreakdown[log.operation_type].tokens += log.total_tokens || 0;
     });
     
     res.status(200).json({ success: true, data: stats });
   } catch (error) {
     console.error('Error fetching AI usage stats:', error);
-    res.status(500).json({ error: 'Failed to fetch usage statistics', details: error.message });
+    res.status(500).json({ error: 'Failed to fetch AI usage stats', details: error.message });
   }
 });
 
@@ -1167,33 +1161,28 @@ app.get('/api/admin/ai-usage-recent', async (req, res) => {
   }
 });
 
-// --- Server Initialization ---
-app.listen(port, () => {
-  console.log(`Backend server listening on port ${port}`);
+// Test endpoint for AI logging
+app.post('/api/admin/test-ai-logging', async (req, res) => {
+  try {
+    const { logTextGenerationUsage } = require('./lib/aiUsageLogger');
+    
+    // Test logging with dummy data
+    await logTextGenerationUsage(
+      'openai',
+      'gpt-3.5-turbo',
+      'test',
+      { prompt_tokens: 10, completion_tokens: 20, total_tokens: 30 },
+      1000,
+      true,
+      null,
+      'test-key'
+    );
+    
+    res.json({ success: true, message: 'Test logging completed' });
+  } catch (error) {
+    console.error('Test logging error:', error);
+    res.status(500).json({ error: 'Test logging failed', details: error.message });
+  }
 });
 
-// --- Helper Functions (Example Structure) ---
-// async function fetchNewsAndProcess() {
-//   try {
-//     // 1. Fetch from Google News API
-//     // const articles = await fetchFromGoogleNews();
-//     
-//     // 2. Filter out existing articles (check Supabase)
-//     // const newArticles = await filterExistingArticles(articles);
-//     
-//     // 3. For each new article:
-//     // for (const article of newArticles) {
-//     //   //  a. Fetch content (carefully - maybe just use API summary if available)
-//     //   //  b. Summarize with OpenAI
-//     //   //  c. Categorize with OpenAI
-//     //   //  d. Store in Supabase
-//     // }
-// 
-//     // console.log('News processing complete.');
-// 
-//   // } catch (error) {
-//   //   console.error('Error during scheduled news fetch:', error);
-//   // }
-// }
-
-// Other helper functions: fetchFromGoogleNews, filterExistingArticles, summarizeWithOpenAI, etc.// Trigger redeploy Mon Sep  8 10:11:16 +07 2025
+// Trigger redeploy Mon Sep  8 10:11:16 +07 2025
