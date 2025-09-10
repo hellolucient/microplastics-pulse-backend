@@ -92,7 +92,36 @@ app.post('/api/add-news', async (req, res) => {
         
         // Check for existing URL using the resolved URL
         console.log(`[Manual Submission] Checking database for URL: ${resolvedUrl}`);
-        const { data: existing } = await supabase.from('latest_news').select('url').eq('url', resolvedUrl).maybeSingle();
+        const { data: existing, error: queryError } = await supabase.from('latest_news').select('url').eq('url', resolvedUrl).maybeSingle();
+        
+        console.log(`[Manual Submission] Database query result:`, { existing, queryError });
+        console.log(`[Manual Submission] existing is truthy:`, !!existing);
+        console.log(`[Manual Submission] existing type:`, typeof existing);
+        console.log(`[Manual Submission] existing value:`, existing);
+        
+        // Additional debugging: Check for similar URLs
+        const { data: similarUrls } = await supabase
+            .from('latest_news')
+            .select('url')
+            .like('url', '%denverpost.com%')
+            .limit(3);
+        console.log(`[Manual Submission] Similar Denver Post URLs in DB:`, similarUrls);
+        
+        const { data: shareUrls } = await supabase
+            .from('latest_news')
+            .select('url')
+            .like('url', '%share.google%')
+            .limit(3);
+        console.log(`[Manual Submission] Google Share URLs in DB:`, shareUrls);
+        
+        if (queryError) {
+            console.error(`[Manual Submission] Database query error:`, queryError);
+            return res.status(500).json({ 
+                error: 'Database query error.',
+                details: queryError.message,
+                code: 'DB_QUERY_ERROR'
+            });
+        }
         
         if (existing) {
             console.log(`[Manual Submission] Found existing URL in database:`, existing);
