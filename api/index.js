@@ -248,6 +248,19 @@ app.post('/api/add-news', async (req, res) => {
                     .replace(/<u>/g, '').replace(/<\/u>/g, '');
             }
             
+            // Check if we got a Cloudflare or bot protection page
+            if (title === 'Just a moment...' || 
+                title.toLowerCase().includes('cloudflare') ||
+                title.toLowerCase().includes('checking your browser') ||
+                title.toLowerCase().includes('please wait') ||
+                html.includes('Cloudflare') ||
+                html.includes('cf-challenge') ||
+                html.includes('Just a moment')) {
+                
+                console.log(`[Manual Submission] Detected Cloudflare/bot protection page, throwing error to trigger Google Search fallback`);
+                throw new Error('Cloudflare protection detected');
+            }
+            
             articleData = {
                 title: title,
                 link: resolvedUrl,
