@@ -92,6 +92,10 @@ app.post('/api/add-news', async (req, res) => {
         
         // Check for existing URL using the resolved URL
         console.log(`[Manual Submission] Checking database for URL: ${resolvedUrl}`);
+        
+        // Let's also check what the exact query looks like
+        console.log(`[Manual Submission] Executing query: SELECT url FROM latest_news WHERE url = '${resolvedUrl}'`);
+        
         const { data: existing, error: queryError } = await supabase.from('latest_news').select('url').eq('url', resolvedUrl).maybeSingle();
         
         console.log(`[Manual Submission] Database query result:`, { existing, queryError });
@@ -113,6 +117,20 @@ app.post('/api/add-news', async (req, res) => {
             .like('url', '%share.google%')
             .limit(3);
         console.log(`[Manual Submission] Google Share URLs in DB:`, shareUrls);
+        
+        // Let's also check if the specific resolved URL exists with a different query
+        const { data: directCheck } = await supabase
+            .from('latest_news')
+            .select('id, url, title')
+            .eq('url', resolvedUrl);
+        console.log(`[Manual Submission] Direct check for resolved URL:`, directCheck);
+        
+        // And let's check if there are any URLs containing the query parameter
+        const { data: queryParamCheck } = await supabase
+            .from('latest_news')
+            .select('id, url, title')
+            .like('url', '%WWJynWQncwsu1Q42i%');
+        console.log(`[Manual Submission] URLs containing query param:`, queryParamCheck);
         
         if (queryError) {
             console.error(`[Manual Submission] Database query error:`, queryError);
