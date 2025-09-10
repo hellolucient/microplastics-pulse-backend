@@ -202,11 +202,13 @@ app.post('/api/add-news', async (req, res) => {
             
             if (titleMatch) {
                 title = titleMatch[1].trim()
+                    .replace(/&#x27;/g, "'")
+                    .replace(/&#39;/g, "'")
+                    .replace(/&quot;/g, '"')
                     .replace(/&amp;/g, '&')
                     .replace(/&lt;/g, '<')
                     .replace(/&gt;/g, '>')
-                    .replace(/&quot;/g, '"')
-                    .replace(/&#39;/g, "'");
+                    .replace(/&nbsp;/g, ' ');
             }
             
             // Extract description/snippet from HTML - try multiple methods
@@ -217,11 +219,13 @@ app.post('/api/add-news', async (req, res) => {
             
             if (descMatch) {
                 snippet = descMatch[1].trim()
+                    .replace(/&#x27;/g, "'")
+                    .replace(/&#39;/g, "'")
+                    .replace(/&quot;/g, '"')
                     .replace(/&amp;/g, '&')
                     .replace(/&lt;/g, '<')
                     .replace(/&gt;/g, '>')
-                    .replace(/&quot;/g, '"')
-                    .replace(/&#39;/g, "'");
+                    .replace(/&nbsp;/g, ' ');
             }
             
             articleData = {
