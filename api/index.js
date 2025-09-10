@@ -91,55 +91,134 @@ app.post('/api/add-news', async (req, res) => {
             details: 'This article has already been processed and exists in our database.',
             code: 'URL_DUPLICATE'
         });
-                // First try to resolve the URL if it's a shortened/share URL
-        let resolvedUrl = url;
-        if (url.includes('share.google') || url.includes('goo.gl') || url.includes('bit.ly') || url.includes('t.co')) {
-            try {
-                console.log(`[Manual Submission] Resolving shortened URL: ${url}`);
-                
-                // For Google share URLs, use GET request to follow redirects
-                const response = await axios.get(url, { 
-                    timeout: 15000, 
-                    maxRedirects: 15 // Let it follow all redirects without content limits
-                });
-                
-                // Get the final redirected URL
-                resolvedUrl = response.request.res.responseUrl || response.request._redirectable?._currentUrl || url;
-                
-                console.log(`[Manual Submission] URL resolved: ${url} -> ${resolvedUrl}`);
-            } catch (resolveError) {
-                console.warn(`[Manual Submission] Could not resolve URL ${url}, using original. Error: ${resolveError.message}`);
-            }
+                // Use the enhanced URL resolver
+        const { resolveGoogleShareUrl } = require('../lib/coreLogic');
+        const resolvedUrl = await resolveGoogleShareUrl(url);
+        
+        if (resolvedUrl !== url) {
+            console.log(`[Manual Submission] URL resolved: ${url} -> ${resolvedUrl}`);
         }
 
-        // Fetch article metadata from Google
-        const googleResponse = await fetchArticlesFromGoogle(resolvedUrl, 1);
-        if (!googleResponse.success) {
-            if (googleResponse.error?.status === 429) {
-                return res.status(429).json({ 
-                    error: 'Rate limit exceeded.',
-                    details: 'Too many requests to Google API. Please try again in a few minutes.',
-                    code: 'GOOGLE_RATE_LIMIT'
-                });
-            }
-            return res.status(500).json({ 
-                error: 'Google API communication error.',
-                details: googleResponse.error?.message || 'Failed to fetch article metadata from Google.',
-                code: 'GOOGLE_API_ERROR'
+        // Try to fetch article metadata directly from the resolved URL
+        let articleData;
+        let response;
+        try {
+            console.log(`[Manual Submission] Attempting to fetch article content directly from: ${resolvedUrl}`);
+            response = await axios.get(resolvedUrl, { 
+                timeout: 15000,
+                maxRedirects: 5, // Allow some redirects but not too many
+                validateStatus: null, // Accept all status codes including 403
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.5',
+                    'Accept-Encoding': 'gzip, deflate',
+                    'Connection': 'keep-alive',
+                    'Upgrade-Insecure-Requests': '1'
+                }
             });
+            
+            const html = response.data;
+            
+            // Extract title from HTML - try multiple methods
+            let title = 'Article Title Not Found';
+            const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i) || 
+                              html.match(/<meta[^>]*property=['\"]og:title['\"][^>]*content=['\"]([^'\"]+)['\"][^>]*>/i) ||
+                              html.match(/<meta[^>]*name=['\"]title['\"][^>]*content=['\"]([^'\"]+)['\"][^>]*>/i) ||
+                              html.match(/<h1[^>]*>([^<]+)<\/h1>/i);
+            
+            if (titleMatch) {
+                title = titleMatch[1].trim()
+                    .replace(/&amp;/g, '&')
+                    .replace(/&lt;/g, '<')
+                    .replace(/&gt;/g, '>')
+                    .replace(/&quot;/g, '"')
+                    .replace(/&#39;/g, "'");
+            }
+            
+            // Extract description/snippet from HTML - try multiple methods
+            let snippet = 'Article description not available';
+            const descMatch = html.match(/<meta[^>]*property=['\"]og:description['\"][^>]*content=['\"]([^'\"]+)['\"][^>]*>/i) ||
+                             html.match(/<meta[^>]*name=['\"]description['\"][^>]*content=['\"]([^'\"]+)['\"][^>]*>/i) ||
+                             html.match(/<meta[^>]*property=['\"]twitter:description['\"][^>]*content=['\"]([^'\"]+)['\"][^>]*>/i);
+            
+            if (descMatch) {
+                snippet = descMatch[1].trim()
+                    .replace(/&amp;/g, '&')
+                    .replace(/&lt;/g, '<')
+                    .replace(/&gt;/g, '>')
+                    .replace(/&quot;/g, '"')
+                    .replace(/&#39;/g, "'");
+            }
+            
+            articleData = {
+                title: title,
+                link: resolvedUrl,
+                snippet: snippet
+            };
+            
+            console.log(`[Manual Submission] Successfully extracted article data: "${title}"`);
+            
+        } catch (directFetchError) {
+            console.log(`[Manual Submission] Direct fetch failed, trying Google Search as fallback: ${directFetchError.message}`);
+            
+            // Check if we got a Cloudflare or similar protection page
+            if (response && response.status === 403 && response.data && response.data.includes('Cloudflare')) {
+                console.log(`[Manual Submission] Detected Cloudflare protection, using enhanced Google Search fallback`);
+            }
+            
+            // Enhanced fallback: Try multiple Google Search strategies
+            let googleResponse;
+            
+            // Strategy 1: Search for the exact URL
+            googleResponse = await fetchArticlesFromGoogle(resolvedUrl, 1);
+            
+            // Strategy 2: If that fails, try searching for the domain + keywords from URL
+            if (!googleResponse.success || !googleResponse.articles || googleResponse.articles.length === 0) {
+                console.log(`[Manual Submission] Exact URL search failed, trying domain-based search`);
+                const urlObj = new URL(resolvedUrl);
+                const domain = urlObj.hostname;
+                const pathParts = urlObj.pathname.split('/').filter(part => part.length > 0);
+                const searchQuery = `site:${domain} ${pathParts.slice(-2).join(' ')}`;
+                googleResponse = await fetchArticlesFromGoogle(searchQuery, 1);
+            }
+            
+            // Strategy 3: If that fails, try a broader domain search
+            if (!googleResponse.success || !googleResponse.articles || googleResponse.articles.length === 0) {
+                console.log(`[Manual Submission] Domain search failed, trying broader site search`);
+                const urlObj = new URL(resolvedUrl);
+                const domain = urlObj.hostname;
+                googleResponse = await fetchArticlesFromGoogle(`site:${domain}`, 1);
+            }
+            
+            if (!googleResponse.success) {
+                if (googleResponse.error?.status === 429) {
+                    return res.status(429).json({ 
+                        error: 'Rate limit exceeded.',
+                        details: 'Too many requests to Google API. Please try again in a few minutes.',
+                        code: 'GOOGLE_RATE_LIMIT'
+                    });
+                }
+                return res.status(500).json({ 
+                    error: 'Google API communication error.',
+                    details: googleResponse.error?.message || 'Failed to fetch article metadata from Google.',
+                    code: 'GOOGLE_API_ERROR'
+                });
+            }
+
+            const searchResults = googleResponse.articles;
+            if (!searchResults || searchResults.length === 0) {
+                return res.status(404).json({ 
+                    error: 'Article not found.',
+                    details: 'Could not find article metadata via Google Search. The article might be too new or not indexed.',
+                    code: 'ARTICLE_NOT_FOUND'
+                });
+            }
+
+            articleData = searchResults[0];
         }
 
-        const searchResults = googleResponse.articles;
-        if (!searchResults || searchResults.length === 0) {
-            return res.status(404).json({ 
-                error: 'Article not found.',
-                details: 'Could not find article metadata via Google Search. The article might be too new or not indexed.',
-                code: 'ARTICLE_NOT_FOUND'
-            });
-        }
-
-        const articleData = searchResults[0];
-        const sourceHostname = new URL(url).hostname;
+        const sourceHostname = new URL(resolvedUrl).hostname;
 
         try {
             // Generate AI summary
