@@ -246,6 +246,34 @@ app.post('/api/add-news', async (req, res) => {
                     .replace(/<b>/g, '').replace(/<\/b>/g, '')
                     .replace(/<i>/g, '').replace(/<\/i>/g, '')
                     .replace(/<u>/g, '').replace(/<\/u>/g, '');
+            } else {
+                // Fallback: Try to extract first paragraph or summary from article body
+                const paragraphMatch = html.match(/<p[^>]*>([^<]+)<\/p>/i) ||
+                                     html.match(/<div[^>]*class=['\"][^'\"]*summary[^'\"]*['\"][^>]*>([^<]+)<\/div>/i) ||
+                                     html.match(/<div[^>]*class=['\"][^'\"]*excerpt[^'\"]*['\"][^>]*>([^<]+)<\/div>/i);
+                
+                if (paragraphMatch) {
+                    snippet = paragraphMatch[1].trim()
+                        .replace(/&#x27;/g, "'")
+                        .replace(/&#39;/g, "'")
+                        .replace(/&quot;/g, '"')
+                        .replace(/&ldquo;/g, '"')
+                        .replace(/&rdquo;/g, '"')
+                        .replace(/&lsquo;/g, "'")
+                        .replace(/&rsquo;/g, "'")
+                        .replace(/&amp;/g, '&')
+                        .replace(/&lt;/g, '<')
+                        .replace(/&gt;/g, '>')
+                        .replace(/&nbsp;/g, ' ')
+                        // Remove HTML tags and convert to plain text
+                        .replace(/<em>/g, '').replace(/<\/em>/g, '')
+                        .replace(/<strong>/g, '').replace(/<\/strong>/g, '')
+                        .replace(/<b>/g, '').replace(/<\/b>/g, '')
+                        .replace(/<i>/g, '').replace(/<\/i>/g, '')
+                        .replace(/<u>/g, '').replace(/<\/u>/g, '')
+                        // Limit length to reasonable snippet size
+                        .substring(0, 200);
+                }
             }
             
             // Check if we got a Cloudflare or bot protection page
