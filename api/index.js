@@ -320,10 +320,10 @@ app.post('/api/add-news', async (req, res) => {
         // Validate article data before processing
         if (!articleData.title || 
             articleData.title === 'Article Title Not Found' || 
-            articleData.title.trim().length < 5 ||
+            articleData.title.trim().length < 3 ||
             !articleData.snippet || 
             articleData.snippet === 'Article description not available' ||
-            articleData.snippet.trim().length < 10) {
+            articleData.snippet.trim().length < 5) {
             
             console.log(`[Manual Submission] Invalid article data - skipping processing:`, {
                 title: articleData.title,

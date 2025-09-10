@@ -177,7 +177,7 @@ async function defaultUrlProcessor(url, subject) {
     
     // Validate email subject before processing
     if (!subject || 
-        subject.trim().length < 5 ||
+        subject.trim().length < 3 ||
         subject.toLowerCase().includes('no subject') ||
         subject.toLowerCase().includes('untitled')) {
         
