@@ -88,17 +88,22 @@ app.post('/api/add-news', async (req, res) => {
         const { resolveGoogleShareUrl } = require('../lib/coreLogic');
         const resolvedUrl = await resolveGoogleShareUrl(url);
         
-        if (resolvedUrl !== url) {
-            console.log(`[Manual Submission] URL resolved: ${url} -> ${resolvedUrl}`);
-        }
+        console.log(`[Manual Submission] URL resolution: ${url} -> ${resolvedUrl}`);
         
         // Check for existing URL using the resolved URL
+        console.log(`[Manual Submission] Checking database for URL: ${resolvedUrl}`);
         const { data: existing } = await supabase.from('latest_news').select('url').eq('url', resolvedUrl).maybeSingle();
-        if (existing) return res.status(409).json({ 
-            error: 'URL already exists.',
-            details: 'This article has already been processed and exists in our database.',
-            code: 'URL_DUPLICATE'
-        });
+        
+        if (existing) {
+            console.log(`[Manual Submission] Found existing URL in database:`, existing);
+            return res.status(409).json({ 
+                error: 'URL already exists.',
+                details: 'This article has already been processed and exists in our database.',
+                code: 'URL_DUPLICATE'
+            });
+        } else {
+            console.log(`[Manual Submission] URL not found in database, proceeding with processing`);
+        }
 
         // Try to fetch article metadata directly from the resolved URL
         let articleData;
