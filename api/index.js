@@ -317,6 +317,15 @@ app.post('/api/add-news', async (req, res) => {
 
         const sourceHostname = new URL(resolvedUrl).hostname;
 
+        // Debug: Log the article data we received
+        console.log(`[Manual Submission] Article data received:`, {
+            title: articleData.title,
+            titleLength: articleData.title?.length,
+            snippet: articleData.snippet,
+            snippetLength: articleData.snippet?.length,
+            link: articleData.link
+        });
+
         // Validate article data before processing
         if (!articleData.title || 
             articleData.title === 'Article Title Not Found' || 
@@ -327,7 +336,9 @@ app.post('/api/add-news', async (req, res) => {
             
             console.log(`[Manual Submission] Invalid article data - skipping processing:`, {
                 title: articleData.title,
-                snippet: articleData.snippet?.substring(0, 50) + '...'
+                titleLength: articleData.title?.length,
+                snippet: articleData.snippet,
+                snippetLength: articleData.snippet?.length
             });
             
             return res.status(400).json({ 
