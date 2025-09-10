@@ -175,6 +175,16 @@ async function defaultUrlProcessor(url, subject) {
     // --- Process the new article ---
     console.log(`[UrlProcessor] PROCESSING NEW ARTICLE from email: "${subject}" (${finalUrl})`);
     
+    // Validate email subject before processing
+    if (!subject || 
+        subject.trim().length < 5 ||
+        subject.toLowerCase().includes('no subject') ||
+        subject.toLowerCase().includes('untitled')) {
+        
+        console.log(`[UrlProcessor] Invalid email subject - skipping processing: "${subject}"`);
+        return { status: 'invalid_subject', url: finalUrl };
+    }
+    
     // Use the email subject as the basis for the summary
     // We don't have a snippet, so we'll pass the subject as both.
     const summary = await summarizeText(subject, subject);

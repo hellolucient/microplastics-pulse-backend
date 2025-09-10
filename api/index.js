@@ -144,10 +144,10 @@ app.post('/api/add-news', async (req, res) => {
         if (existing) {
             console.log(`[Manual Submission] Found existing URL in database:`, existing);
             return res.status(409).json({ 
-                error: 'URL already exists.',
-                details: 'This article has already been processed and exists in our database.',
-                code: 'URL_DUPLICATE'
-            });
+            error: 'URL already exists.',
+            details: 'This article has already been processed and exists in our database.',
+            code: 'URL_DUPLICATE'
+        });
         } else {
             console.log(`[Manual Submission] URL not found in database, proceeding with processing`);
         }
@@ -158,7 +158,7 @@ app.post('/api/add-news', async (req, res) => {
         try {
             console.log(`[Manual Submission] Attempting to fetch article content directly from: ${resolvedUrl}`);
             response = await axios.get(resolvedUrl, { 
-                timeout: 15000,
+                    timeout: 15000, 
                 maxRedirects: 5, // Allow some redirects but not too many
                 validateStatus: null, // Accept all status codes including 403
                 headers: {
@@ -268,34 +268,54 @@ app.post('/api/add-news', async (req, res) => {
                 googleResponse = await fetchArticlesFromGoogle(`site:${domain}`, 1);
             }
             
-            if (!googleResponse.success) {
-                if (googleResponse.error?.status === 429) {
-                    return res.status(429).json({ 
-                        error: 'Rate limit exceeded.',
-                        details: 'Too many requests to Google API. Please try again in a few minutes.',
-                        code: 'GOOGLE_RATE_LIMIT'
-                    });
-                }
-                return res.status(500).json({ 
-                    error: 'Google API communication error.',
-                    details: googleResponse.error?.message || 'Failed to fetch article metadata from Google.',
-                    code: 'GOOGLE_API_ERROR'
+        if (!googleResponse.success) {
+            if (googleResponse.error?.status === 429) {
+                return res.status(429).json({ 
+                    error: 'Rate limit exceeded.',
+                    details: 'Too many requests to Google API. Please try again in a few minutes.',
+                    code: 'GOOGLE_RATE_LIMIT'
                 });
             }
+            return res.status(500).json({ 
+                error: 'Google API communication error.',
+                details: googleResponse.error?.message || 'Failed to fetch article metadata from Google.',
+                code: 'GOOGLE_API_ERROR'
+            });
+        }
 
-            const searchResults = googleResponse.articles;
-            if (!searchResults || searchResults.length === 0) {
-                return res.status(404).json({ 
-                    error: 'Article not found.',
-                    details: 'Could not find article metadata via Google Search. The article might be too new or not indexed.',
-                    code: 'ARTICLE_NOT_FOUND'
-                });
-            }
+        const searchResults = googleResponse.articles;
+        if (!searchResults || searchResults.length === 0) {
+            return res.status(404).json({ 
+                error: 'Article not found.',
+                details: 'Could not find article metadata via Google Search. The article might be too new or not indexed.',
+                code: 'ARTICLE_NOT_FOUND'
+            });
+        }
 
             articleData = searchResults[0];
         }
 
         const sourceHostname = new URL(resolvedUrl).hostname;
+
+        // Validate article data before processing
+        if (!articleData.title || 
+            articleData.title === 'Article Title Not Found' || 
+            articleData.title.trim().length < 5 ||
+            !articleData.snippet || 
+            articleData.snippet === 'Article description not available' ||
+            articleData.snippet.trim().length < 10) {
+            
+            console.log(`[Manual Submission] Invalid article data - skipping processing:`, {
+                title: articleData.title,
+                snippet: articleData.snippet?.substring(0, 50) + '...'
+            });
+            
+            return res.status(400).json({ 
+                error: 'Invalid article data.',
+                details: 'Article title or description is missing, too short, or invalid. Cannot process incomplete articles.',
+                code: 'INVALID_ARTICLE_DATA'
+            });
+        }
 
         try {
             // Generate AI summary
