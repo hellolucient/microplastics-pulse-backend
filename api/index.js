@@ -212,7 +212,13 @@ app.post('/api/add-news', async (req, res) => {
                     .replace(/&amp;/g, '&')
                     .replace(/&lt;/g, '<')
                     .replace(/&gt;/g, '>')
-                    .replace(/&nbsp;/g, ' ');
+                    .replace(/&nbsp;/g, ' ')
+                    // Remove HTML tags and convert to plain text
+                    .replace(/<em>/g, '').replace(/<\/em>/g, '')
+                    .replace(/<strong>/g, '').replace(/<\/strong>/g, '')
+                    .replace(/<b>/g, '').replace(/<\/b>/g, '')
+                    .replace(/<i>/g, '').replace(/<\/i>/g, '')
+                    .replace(/<u>/g, '').replace(/<\/u>/g, '');
             }
             
             // Extract description/snippet from HTML - try multiple methods
@@ -233,7 +239,13 @@ app.post('/api/add-news', async (req, res) => {
                     .replace(/&amp;/g, '&')
                     .replace(/&lt;/g, '<')
                     .replace(/&gt;/g, '>')
-                    .replace(/&nbsp;/g, ' ');
+                    .replace(/&nbsp;/g, ' ')
+                    // Remove HTML tags and convert to plain text
+                    .replace(/<em>/g, '').replace(/<\/em>/g, '')
+                    .replace(/<strong>/g, '').replace(/<\/strong>/g, '')
+                    .replace(/<b>/g, '').replace(/<\/b>/g, '')
+                    .replace(/<i>/g, '').replace(/<\/i>/g, '')
+                    .replace(/<u>/g, '').replace(/<\/u>/g, '');
             }
             
             articleData = {
