@@ -162,29 +162,53 @@ app.get('/api/latest-news', async (req, res) => {
       return res.status(503).json({ error: 'Database client not available.' });
   }
   try {
+      // Get pagination parameters
+      const page = parseInt(req.query.page) || 1;
+      const limit = parseInt(req.query.limit) || 1000; // Default to 1000 (Supabase max)
+      const offset = (page - 1) * limit;
+
+      // Get total count first
+      const { count, error: countError } = await supabase
+          .from('latest_news')
+          .select('*', { count: 'exact', head: true });
+
+      if (countError) {
+          console.error('Error getting count:', countError);
+          res.setHeader('Cache-Control', 'no-store'); 
+          return res.status(500).json({ error: 'Database error getting count.', details: countError.message });
+      }
+
+      // Get paginated data
       const { data, error } = await supabase
           .from('latest_news')
           .select('*') 
           .order('processed_at', { ascending: false })
-          .limit(50); // Example limit
+          .range(offset, offset + limit - 1);
 
       if (error) {
           console.error('Error fetching latest news:', error);
           res.setHeader('Cache-Control', 'no-store'); 
-          // Instead of throwing, send a response directly for clarity
           return res.status(500).json({ error: 'Database error fetching latest news.', details: error.message });
       }
-      // For local dev, caching headers might not be strictly necessary but don't hurt
-      res.setHeader('Cache-Control', 'public, max-age=3600, stale-while-revalidate=86400');
-      res.status(200).json(data || []);
-  } catch (error) { // This outer catch is for truly unexpected errors
+
+      // For local dev, disable caching to see changes immediately
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      res.status(200).json({
+          data: data || [],
+          pagination: {
+              page,
+              limit,
+              total: count || 0,
+              totalPages: Math.ceil((count || 0) / limit),
+              hasNext: offset + limit < (count || 0),
+              hasPrev: page > 1
+          }
+      });
+  } catch (error) {
       if (!res.getHeader('Cache-Control')) {
           res.setHeader('Cache-Control', 'no-store');
       }
-      // Avoid double logging if already logged
-      if (!error.message?.includes('fetching latest news') && !error.message?.includes('Supabase client not available')) {
-          console.error('Unexpected critical error in /api/latest-news:', error);
-      }
+      console.error('Unexpected critical error in /api/latest-news:', error);
       if (!res.headersSent) {
         res.status(500).json({ error: 'Failed to fetch latest news due to an unexpected server issue.' });
       }
