@@ -36,6 +36,25 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
+// Cosine similarity function for semantic search
+function cosineSimilarity(a, b) {
+  if (a.length !== b.length) return 0;
+  
+  let dotProduct = 0;
+  let normA = 0;
+  let normB = 0;
+  
+  for (let i = 0; i < a.length; i++) {
+    dotProduct += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+  
+  if (normA === 0 || normB === 0) return 0;
+  
+  return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
 // Generate embedding for text using OpenAI
 async function generateEmbedding(text) {
   try {
@@ -1829,7 +1848,7 @@ app.get('/api/rag-documents/public', async (req, res) => {
   }
 });
 
-// Search public RAG documents
+// Search public RAG documents using semantic search
 app.get('/api/rag-documents/public/search', async (req, res) => {
   if (!supabase) return res.status(503).json({ error: 'Database client not available.' });
   
@@ -1840,9 +1859,90 @@ app.get('/api/rag-documents/public/search', async (req, res) => {
       return res.status(400).json({ error: 'Search term is required.' });
     }
     
-    const searchQuery = searchTerm.toLowerCase().trim();
     const pageNum = parseInt(page);
     const limitNum = parseInt(limit);
+    
+    // Generate embedding for the search query
+    const queryEmbedding = await generateEmbedding(searchTerm);
+    
+    if (!queryEmbedding) {
+      // Fallback to text search if embedding fails
+      return await searchDocumentsFallback(req, res, searchTerm, pageNum, limitNum);
+    }
+    
+    // Get all public documents with embeddings
+    const { data: documents, error: documentsError } = await supabase
+      .from('rag_documents')
+      .select('id, title, content, file_type, file_size, metadata, created_at, embedding')
+      .eq('is_active', true)
+      .eq('access_level', 'public')
+      .not('embedding', 'is', null)
+      .not('content', 'is', null);
+    
+    if (documentsError) {
+      console.error('Error fetching documents with embeddings:', documentsError);
+      return await searchDocumentsFallback(req, res, searchTerm, pageNum, limitNum);
+    }
+    
+    if (!documents || documents.length === 0) {
+      return res.status(200).json({
+        documents: [],
+        pagination: {
+          page: pageNum,
+          limit: limitNum,
+          total: 0,
+          totalPages: 0,
+          hasNext: false,
+          hasPrev: false
+        }
+      });
+    }
+    
+    // Calculate similarity scores
+    const documentsWithSimilarity = documents.map(doc => {
+      const similarity = cosineSimilarity(queryEmbedding, doc.embedding);
+      return {
+        ...doc,
+        similarity
+      };
+    });
+    
+    // Sort by similarity and filter by threshold
+    const relevantDocuments = documentsWithSimilarity
+      .sort((a, b) => b.similarity - a.similarity)
+      .filter(doc => doc.similarity > 0.7) // Only include documents with good similarity
+      .map(({ similarity, embedding, ...doc }) => doc); // Remove similarity and embedding from response
+    
+    // Apply pagination
+    const offset = (pageNum - 1) * limitNum;
+    const paginatedResults = relevantDocuments.slice(offset, offset + limitNum);
+    
+    const totalPages = Math.ceil(relevantDocuments.length / limitNum);
+    const pagination = {
+      page: pageNum,
+      limit: limitNum,
+      total: relevantDocuments.length,
+      totalPages,
+      hasNext: pageNum < totalPages,
+      hasPrev: pageNum > 1
+    };
+    
+    res.status(200).json({
+      documents: paginatedResults,
+      pagination,
+      searchTerm: searchTerm.toLowerCase().trim()
+    });
+    
+  } catch (error) {
+    console.error('Error in semantic document search:', error);
+    return await searchDocumentsFallback(req, res, searchTerm, pageNum, limitNum);
+  }
+});
+
+// Fallback text search function
+async function searchDocumentsFallback(req, res, searchTerm, pageNum, limitNum) {
+  try {
+    const searchQuery = searchTerm.toLowerCase().trim();
     const offset = (pageNum - 1) * limitNum;
     
     // Search across title and content fields
@@ -1856,7 +1956,7 @@ app.get('/api/rag-documents/public/search', async (req, res) => {
       .range(offset, offset + limitNum - 1);
     
     if (error) {
-      console.error('Error searching RAG documents:', error);
+      console.error('Error in fallback search:', error);
       return res.status(500).json({ error: 'Failed to search documents.', details: error.message });
     }
     
@@ -1871,17 +1971,16 @@ app.get('/api/rag-documents/public/search', async (req, res) => {
     };
     
     res.status(200).json({
-      success: true,
-      data: data || [],
+      documents: data || [],
       pagination,
       searchTerm: searchQuery
     });
     
   } catch (error) {
-    console.error('Error searching RAG documents:', error);
-    res.status(500).json({ error: 'Failed to search documents.', details: error.message });
+    console.error('Error in fallback document search:', error);
+    res.status(500).json({ error: 'Failed to search documents.' });
   }
-});
+}
 
 // Delete RAG document (admin only)
 app.delete('/api/admin/rag-documents/:id', async (req, res) => {
