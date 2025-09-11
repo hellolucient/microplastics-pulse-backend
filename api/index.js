@@ -1848,7 +1848,7 @@ app.get('/api/rag-documents/public/search', async (req, res) => {
     // Search across title and content fields
     const { data, error, count } = await supabase
       .from('rag_documents')
-      .select('id, title, file_type, file_size, metadata, created_at', { count: 'exact' })
+      .select('id, title, content, file_type, file_size, metadata, created_at', { count: 'exact' })
       .eq('is_active', true)
       .eq('access_level', 'public')
       .or(`title.ilike.%${searchQuery}%,content.ilike.%${searchQuery}%`)
