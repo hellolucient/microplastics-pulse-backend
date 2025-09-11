@@ -54,6 +54,42 @@ The project is organized into two main repositories, typically managed within a 
     *   **Description:** Contains the backend API built with Node.js and Express.js, deployed on Railway with persistent process and automated scheduling.
     *   **Responsibilities:** API endpoints for fetching/serving news, automated daily tasks (Google fetch, email check, Twitter posting), AI processing (summaries, images), database interactions (Supabase), and comprehensive admin tools.
 
+### Backend File Structure & Deployment
+
+**⚠️ IMPORTANT: Understanding the Dual index.js Files**
+
+The backend has a specific deployment structure that can cause confusion:
+
+```
+microplastics-pulse-backend/
+├── index.js          # Development/local server (npm start)
+├── api/
+│   └── index.js      # Production/Railway deployment (Railway runs this)
+├── Dockerfile        # Specifies: CMD ["node", "api/index.js"]
+└── vercel.json       # Routes /api/* to /api/index.js
+```
+
+**Key Points:**
+- **Local Development**: Uses root `index.js` (`npm start` → `node index.js`)
+- **Railway Production**: Uses `api/index.js` (Dockerfile specifies this)
+- **Vercel Deployment**: Routes `/api/*` requests to `api/index.js`
+- **⚠️ CRITICAL**: When making changes, you MUST update BOTH files or Railway won't see your changes!
+
+**Why This Structure Exists:**
+- Originally designed for Vercel deployment (serverless functions in `/api/` directory)
+- Railway adopted the same structure for consistency
+- Allows both serverless (Vercel) and persistent (Railway) deployments from the same codebase
+
+**Development Workflow:**
+1. Make changes to `api/index.js` for production
+2. Run `npm run sync:api-to-root` to copy changes to root `index.js` for local testing
+3. Commit and push - Railway will automatically deploy `api/index.js`
+
+**Sync Utility:**
+- `npm run sync:api-to-root` - Copy production file to development file
+- `npm run sync:root-to-api` - Copy development file to production file  
+- `npm run sync:check` - Check if both files are in sync
+
 ## 5. Tech Stack
 
 *   **Frontend:**
@@ -125,8 +161,10 @@ To set up and run the project locally, you'll generally need to:
         *   `cd ../microplastics-pulse-backend && npm install` (or `yarn install`)
 
 4.  **Run Development Servers:**
-    *   **Backend:** `cd microplastics-pulse-backend && npm run dev` (or your configured script, often `node api/index.js` for local testing if set up for it).
+    *   **Backend:** `cd microplastics-pulse-backend && npm start` (runs root `index.js` for local development)
     *   **Frontend:** `cd microplastics-pulse-frontend && npm run dev` (or `yarn dev`). This will usually start the Vite development server, and you can access the frontend in your browser (typically `http://localhost:5173` or similar).
+
+**⚠️ Development Note:** The backend uses `npm start` (not `npm run dev`) and runs the root `index.js` file for local development. For production deployment, Railway automatically runs `api/index.js` as specified in the Dockerfile.
 
 ## 8. Automated Daily Tasks (2:00 AM UTC)
 
@@ -221,6 +259,33 @@ The MicroPlastics Pulse backend is now a robust, production-ready system with:
 **Next Scheduled Run**: Daily at 2:00 AM UTC  
 **Manual Testing**: Available via admin panel automation triggers  
 **Monitoring**: Railway logs + admin panel status updates
+
+---
+
+## 🔧 Troubleshooting Common Issues
+
+### "Changes Not Reflecting in Production"
+
+**Problem**: You made changes but they're not showing up on Railway.
+
+**Solution**: Remember the dual index.js structure!
+1. ✅ Did you update `api/index.js`? (Railway runs this)
+2. ✅ Did you commit and push your changes?
+3. ✅ Check Railway deployment logs for errors
+
+**Quick Fix**: Always make changes in `api/index.js` first, then copy to root `index.js` for local testing.
+
+### "Local Development Not Working"
+
+**Problem**: `npm run dev` fails or doesn't start the server.
+
+**Solution**: Use `npm start` instead - the backend doesn't have a `dev` script, it uses `start` which runs root `index.js`.
+
+### "API Endpoints Not Found"
+
+**Problem**: Getting 404 errors for API endpoints.
+
+**Solution**: Check that your changes are in `api/index.js` and that Railway has redeployed successfully.
 
 ---
 

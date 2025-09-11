@@ -4,7 +4,10 @@
   "main": "index.js",
   "scripts": {
     "start": "node -e \"console.log('twitter-api-v2 version:', require('twitter-api-v2/package.json').version)\" && node index.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "sync:api-to-root": "node sync-files.js api-to-root",
+    "sync:root-to-api": "node sync-files.js root-to-api",
+    "sync:check": "node sync-files.js check"
   },
   "keywords": [],
   "author": "",
