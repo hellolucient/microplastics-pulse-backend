@@ -8,6 +8,8 @@ const nodemailer = require('nodemailer');
 const cron = require('node-cron');
 const { postSingleTweet } = require('../lib/twitterService');
 const { runScheduledTasks, runEmailCheck } = require('../lib/automation');
+const multer = require('multer');
+const DocumentProcessor = require('../lib/documentProcessor');
 const {
   supabase,
   processQueryAndSave,
@@ -24,6 +26,31 @@ const {
 const chatRoutes = require('./admin/chat');
 
 const app = express();
+
+// Initialize document processor
+const documentProcessor = new DocumentProcessor();
+
+// Configure multer for file uploads
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB limit
+  },
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = [
+      'application/pdf',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/msword',
+      'text/plain'
+    ];
+    
+    if (allowedTypes.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Invalid file type. Only PDF, Word, and text files are allowed.'), false);
+    }
+  }
+});
 
 // --- Middleware ---
 app.use(express.json()); 
@@ -1493,27 +1520,70 @@ app.post('/api/admin/test-ai-logging', async (req, res) => {
 // --- RAG Document Management Endpoints ---
 
 // Upload document endpoint
-app.post('/api/admin/rag-documents/upload', async (req, res) => {
+app.post('/api/admin/rag-documents/upload', upload.single('file'), async (req, res) => {
   if (!supabase) return res.status(503).json({ error: 'Database client not available.' });
   
   try {
     const { title, content, fileType = 'manual', fileUrl, fileSize, metadata = {}, accessLevel = 'admin', uploadedBy } = req.body;
+    const uploadedFile = req.file;
     
-    // Validate required fields
-    if (!title || !content) {
-      return res.status(400).json({ error: 'Title and content are required.' });
+    let processedDocument;
+    
+    // Handle file upload
+    if (uploadedFile) {
+      console.log(`Processing uploaded file: ${uploadedFile.originalname}`);
+      
+      // Validate file
+      documentProcessor.validateFile(uploadedFile.buffer, uploadedFile.originalname, uploadedFile.mimetype);
+      
+      // Process document
+      processedDocument = await documentProcessor.processDocument(
+        uploadedFile.buffer, 
+        uploadedFile.originalname, 
+        uploadedFile.mimetype
+      );
+      
+      // Override title if provided
+      if (title && title.trim()) {
+        processedDocument.title = title.trim();
+      }
+      
+      // Merge metadata
+      processedDocument.metadata = {
+        ...processedDocument.metadata,
+        ...JSON.parse(metadata || '{}'),
+        uploadedFilename: uploadedFile.originalname,
+        uploadedMimeType: uploadedFile.mimetype
+      };
+      
+    } else {
+      // Handle manual entry
+      if (!title || !content) {
+        return res.status(400).json({ error: 'Title and content are required for manual entry.' });
+      }
+      
+      processedDocument = {
+        title: title.trim(),
+        content: content.trim(),
+        chunks: documentProcessor.createChunks(content.trim()),
+        metadata: JSON.parse(metadata || '{}'),
+        fileType: fileType,
+        fileSize: content.length,
+        wordCount: documentProcessor.countWords(content.trim()),
+        chunkCount: documentProcessor.createChunks(content.trim()).length
+      };
     }
     
     // Insert document into database
-    const { data, error } = await supabase
+    const { data: documentData, error: docError } = await supabase
       .from('rag_documents')
       .insert({
-        title: title.trim(),
-        content: content.trim(),
-        file_type: fileType,
+        title: processedDocument.title,
+        content: processedDocument.content,
+        file_type: processedDocument.fileType,
         file_url: fileUrl,
-        file_size: fileSize,
-        metadata: metadata,
+        file_size: processedDocument.fileSize,
+        metadata: processedDocument.metadata,
         access_level: accessLevel,
         uploaded_by: uploadedBy || 'admin@microplasticspulse.com',
         is_active: true
@@ -1521,20 +1591,44 @@ app.post('/api/admin/rag-documents/upload', async (req, res) => {
       .select()
       .single();
     
-    if (error) {
-      console.error('Error inserting RAG document:', error);
-      return res.status(500).json({ error: 'Failed to save document.', details: error.message });
+    if (docError) {
+      console.error('Error inserting RAG document:', docError);
+      return res.status(500).json({ error: 'Failed to save document.', details: docError.message });
+    }
+    
+    // Insert chunks into chunks table
+    if (processedDocument.chunks && processedDocument.chunks.length > 0) {
+      const chunkInserts = processedDocument.chunks.map((chunk, index) => ({
+        document_id: documentData.id,
+        chunk_index: index,
+        chunk_text: chunk,
+        word_count: documentProcessor.countWords(chunk)
+      }));
+      
+      const { error: chunksError } = await supabase
+        .from('rag_document_chunks')
+        .insert(chunkInserts);
+      
+      if (chunksError) {
+        console.error('Error inserting document chunks:', chunksError);
+        // Don't fail the entire operation, just log the error
+      }
     }
     
     res.status(201).json({ 
       success: true, 
-      message: 'Document uploaded successfully.',
-      document: data
+      message: uploadedFile ? 'Document uploaded and processed successfully!' : 'Document saved successfully!',
+      document: {
+        ...documentData,
+        wordCount: processedDocument.wordCount,
+        chunkCount: processedDocument.chunkCount,
+        chunks: processedDocument.chunks?.length || 0
+      }
     });
     
   } catch (error) {
     console.error('Error in document upload:', error);
-    res.status(500).json({ error: 'Failed to upload document.', details: error.message });
+    res.status(500).json({ error: 'Internal server error.', details: error.message });
   }
 });
 
