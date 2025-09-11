@@ -1910,7 +1910,7 @@ app.get('/api/rag-documents/public/search', async (req, res) => {
     // Sort by similarity and filter by threshold
     const relevantDocuments = documentsWithSimilarity
       .sort((a, b) => b.similarity - a.similarity)
-      .filter(doc => doc.similarity > 0.7) // Only include documents with good similarity
+      .filter(doc => doc.similarity > 0.3) // Lower threshold to catch more matches
       .map(({ similarity, embedding, ...doc }) => doc); // Remove similarity and embedding from response
     
     // Apply pagination
@@ -1960,11 +1960,12 @@ async function searchDocumentsFallback(req, res, searchTerm, pageNum, limitNum) 
       return res.status(500).json({ error: 'Failed to search documents.', details: error.message });
     }
     
-    const totalPages = Math.ceil(count / limitNum);
+    const totalCount = count || 0;
+    const totalPages = Math.ceil(totalCount / limitNum);
     const pagination = {
       page: pageNum,
       limit: limitNum,
-      total: count,
+      total: totalCount,
       totalPages,
       hasNext: pageNum < totalPages,
       hasPrev: pageNum > 1
