@@ -57,8 +57,6 @@ router.post('/', async (req, res) => {
 // Unified embeddings endpoint with Server-Sent Events for progress (articles + RAG documents)
 router.post('/generate-embeddings', async (req, res) => {
   try {
-    console.log('🚀 Starting unified embedding generation (articles + RAG documents)...');
-    
     // Set up Server-Sent Events
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
