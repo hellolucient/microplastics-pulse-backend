@@ -266,20 +266,25 @@ async function generateGeneralResponse(message, model, provider, conversationHis
 
 // Research chat with RAG
 async function generateResearchResponse(message, model, provider, conversationHistory) {
-  // Get relevant articles
-  const relevantArticles = await getRelevantArticles(message);
+  // Get relevant content (articles + documents)
+  const relevantContent = await getRelevantArticles(message);
   
-  // Build context from articles
-  const context = relevantArticles.map(article => 
-    `Title: ${article.title}\nSummary: ${article.ai_summary}\nSource: ${article.url}\nDate: ${article.published_date}`
-  ).join('\n\n---\n\n');
+  // Build context from content
+  const context = relevantContent.map(item => {
+    if (item.type === 'article') {
+      return `[ARTICLE] Title: ${item.title}\nSummary: ${item.ai_summary}\nSource: ${item.url}\nDate: ${item.published_date}`;
+    } else if (item.type === 'document') {
+      return `[DOCUMENT] Title: ${item.title}\nContent: ${item.content.substring(0, 1000)}${item.content.length > 1000 ? '...' : ''}\nSource: ${item.source}\nDate: ${item.date}`;
+    }
+    return '';
+  }).join('\n\n---\n\n');
 
-  const systemPrompt = `You are a microplastics research assistant. Based on the following research articles from the Microplastics Pulse database, answer the user's question. If the articles don't contain enough information to fully answer the question, say so and suggest what additional research might be needed.
+  const systemPrompt = `You are a microplastics research assistant. Based on the following research content from the Microplastics Pulse database (including both news articles and uploaded research documents), answer the user's question. If the content doesn't contain enough information to fully answer the question, say so and suggest what additional research might be needed.
 
-Research Articles:
+Research Content:
 ${context}
 
-Please provide a comprehensive answer based on the research, and cite specific articles when relevant. Include the source URLs for transparency.`;
+Please provide a comprehensive answer based on the research, and cite specific sources when relevant. For articles, include the source URLs. For documents, mention the document title and type.`;
 
   const startTime = Date.now();
 
@@ -424,7 +429,7 @@ function cosineSimilarity(a, b) {
   return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
-// Get relevant articles for RAG with enhanced semantic search
+// Get relevant content for RAG with enhanced semantic search (articles + documents)
 async function getRelevantArticles(query) {
   try {
     // Generate embedding for the query
@@ -436,47 +441,88 @@ async function getRelevantArticles(query) {
     }
 
     // Get all articles with embeddings
-    const { data: articles, error } = await supabase
+    const { data: articles, error: articlesError } = await supabase
       .from('latest_news')
       .select('id, title, ai_summary, url, published_date, embedding')
       .not('embedding', 'is', null)
       .not('ai_summary', 'is', null);
 
-    if (error) {
-      console.error('Error fetching articles with embeddings:', error);
+    if (articlesError) {
+      console.error('Error fetching articles with embeddings:', articlesError);
+    }
+
+    // Get all documents with embeddings (admin access only for AI Chat)
+    const { data: documents, error: documentsError } = await supabase
+      .from('rag_documents')
+      .select('id, title, content, file_type, metadata, created_at, embedding')
+      .not('embedding', 'is', null)
+      .not('content', 'is', null)
+      .eq('is_active', true);
+
+    if (documentsError) {
+      console.error('Error fetching documents with embeddings:', documentsError);
+    }
+
+    // Combine articles and documents
+    const allContent = [];
+    
+    // Add articles
+    if (articles && articles.length > 0) {
+      articles.forEach(article => {
+        allContent.push({
+          ...article,
+          type: 'article',
+          content: article.ai_summary,
+          source: article.url,
+          date: article.published_date
+        });
+      });
+    }
+
+    // Add documents
+    if (documents && documents.length > 0) {
+      documents.forEach(doc => {
+        allContent.push({
+          ...doc,
+          type: 'document',
+          content: doc.content,
+          source: doc.file_url || 'Uploaded Document',
+          date: doc.created_at,
+          ai_summary: doc.content.substring(0, 200) + '...' // Truncate for display
+        });
+      });
+    }
+
+    if (allContent.length === 0) {
       return await getRelevantArticlesFallback(query);
     }
 
-    if (!articles || articles.length === 0) {
-      return await getRelevantArticlesFallback(query);
-    }
-
-    // Calculate similarity scores
-    const articlesWithSimilarity = articles.map(article => {
-      const similarity = cosineSimilarity(queryEmbedding, article.embedding);
+    // Calculate similarity scores for all content
+    const contentWithSimilarity = allContent.map(item => {
+      const similarity = cosineSimilarity(queryEmbedding, item.embedding);
       return {
-        ...article,
+        ...item,
         similarity
       };
     });
 
-    // Sort by similarity and get top 5
-    const relevantArticles = articlesWithSimilarity
+    // Sort by similarity and get top 7 (more results since we have more content)
+    const relevantContent = contentWithSimilarity
       .sort((a, b) => b.similarity - a.similarity)
-      .slice(0, 5)
-      .filter(article => article.similarity > 0.7) // Only include articles with good similarity
-      .map(({ similarity, embedding, ...article }) => article); // Remove similarity and embedding from response
+      .slice(0, 7)
+      .filter(item => item.similarity > 0.7) // Only include content with good similarity
+      .map(({ similarity, embedding, ...item }) => item); // Remove similarity and embedding from response
 
     // If we have good semantic matches, return them
-    if (relevantArticles.length > 0) {
-      return relevantArticles;
+    if (relevantContent.length > 0) {
+      return relevantContent;
     }
 
     // Otherwise, fallback to text search
     return await getRelevantArticlesFallback(query);
 
   } catch (error) {
-    console.error('Error in enhanced article retrieval:', error);
+    console.error('Error in enhanced content retrieval:', error);
     return await getRelevantArticlesFallback(query);
   }
 }

@@ -1490,6 +1490,354 @@ app.post('/api/admin/test-ai-logging', async (req, res) => {
   }
 });
 
+// --- RAG Document Management Endpoints ---
+
+// Upload document endpoint
+app.post('/api/admin/rag-documents/upload', async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database client not available.' });
+  
+  try {
+    const { title, content, fileType = 'manual', fileUrl, fileSize, metadata = {}, accessLevel = 'admin', uploadedBy } = req.body;
+    
+    // Validate required fields
+    if (!title || !content) {
+      return res.status(400).json({ error: 'Title and content are required.' });
+    }
+    
+    // Insert document into database
+    const { data, error } = await supabase
+      .from('rag_documents')
+      .insert({
+        title: title.trim(),
+        content: content.trim(),
+        file_type: fileType,
+        file_url: fileUrl,
+        file_size: fileSize,
+        metadata: metadata,
+        access_level: accessLevel,
+        uploaded_by: uploadedBy || 'admin@microplasticspulse.com',
+        is_active: true
+      })
+      .select()
+      .single();
+    
+    if (error) {
+      console.error('Error inserting RAG document:', error);
+      return res.status(500).json({ error: 'Failed to save document.', details: error.message });
+    }
+    
+    res.status(201).json({ 
+      success: true, 
+      message: 'Document uploaded successfully.',
+      document: data
+    });
+    
+  } catch (error) {
+    console.error('Error in document upload:', error);
+    res.status(500).json({ error: 'Failed to upload document.', details: error.message });
+  }
+});
+
+// Get all RAG documents (admin only)
+app.get('/api/admin/rag-documents', async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database client not available.' });
+  
+  try {
+    const { page = 1, limit = 20, accessLevel, fileType } = req.query;
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const offset = (pageNum - 1) * limitNum;
+    
+    let query = supabase
+      .from('rag_documents')
+      .select('*', { count: 'exact' })
+      .eq('is_active', true)
+      .order('created_at', { ascending: false });
+    
+    // Apply filters
+    if (accessLevel) {
+      query = query.eq('access_level', accessLevel);
+    }
+    if (fileType) {
+      query = query.eq('file_type', fileType);
+    }
+    
+    const { data, error, count } = await query
+      .range(offset, offset + limitNum - 1);
+    
+    if (error) {
+      console.error('Error fetching RAG documents:', error);
+      return res.status(500).json({ error: 'Failed to fetch documents.', details: error.message });
+    }
+    
+    const totalPages = Math.ceil(count / limitNum);
+    const pagination = {
+      page: pageNum,
+      limit: limitNum,
+      total: count,
+      totalPages,
+      hasNext: pageNum < totalPages,
+      hasPrev: pageNum > 1
+    };
+    
+    res.status(200).json({
+      success: true,
+      data: data || [],
+      pagination
+    });
+    
+  } catch (error) {
+    console.error('Error fetching RAG documents:', error);
+    res.status(500).json({ error: 'Failed to fetch documents.', details: error.message });
+  }
+});
+
+// Get public RAG documents (for Research Library page)
+app.get('/api/rag-documents/public', async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database client not available.' });
+  
+  try {
+    const { page = 1, limit = 20 } = req.query;
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const offset = (pageNum - 1) * limitNum;
+    
+    const { data, error, count } = await supabase
+      .from('rag_documents')
+      .select('id, title, file_type, file_size, metadata, created_at', { count: 'exact' })
+      .eq('is_active', true)
+      .eq('access_level', 'public')
+      .order('created_at', { ascending: false })
+      .range(offset, offset + limitNum - 1);
+    
+    if (error) {
+      console.error('Error fetching public RAG documents:', error);
+      return res.status(500).json({ error: 'Failed to fetch documents.', details: error.message });
+    }
+    
+    const totalPages = Math.ceil(count / limitNum);
+    const pagination = {
+      page: pageNum,
+      limit: limitNum,
+      total: count,
+      totalPages,
+      hasNext: pageNum < totalPages,
+      hasPrev: pageNum > 1
+    };
+    
+    res.status(200).json({
+      success: true,
+      data: data || [],
+      pagination
+    });
+    
+  } catch (error) {
+    console.error('Error fetching public RAG documents:', error);
+    res.status(500).json({ error: 'Failed to fetch documents.', details: error.message });
+  }
+});
+
+// Search public RAG documents
+app.get('/api/rag-documents/public/search', async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database client not available.' });
+  
+  try {
+    const { q: searchTerm, page = 1, limit = 20 } = req.query;
+    
+    if (!searchTerm || searchTerm.trim().length === 0) {
+      return res.status(400).json({ error: 'Search term is required.' });
+    }
+    
+    const searchQuery = searchTerm.toLowerCase().trim();
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const offset = (pageNum - 1) * limitNum;
+    
+    // Search across title and content fields
+    const { data, error, count } = await supabase
+      .from('rag_documents')
+      .select('id, title, file_type, file_size, metadata, created_at', { count: 'exact' })
+      .eq('is_active', true)
+      .eq('access_level', 'public')
+      .or(`title.ilike.%${searchQuery}%,content.ilike.%${searchQuery}%`)
+      .order('created_at', { ascending: false })
+      .range(offset, offset + limitNum - 1);
+    
+    if (error) {
+      console.error('Error searching RAG documents:', error);
+      return res.status(500).json({ error: 'Failed to search documents.', details: error.message });
+    }
+    
+    const totalPages = Math.ceil(count / limitNum);
+    const pagination = {
+      page: pageNum,
+      limit: limitNum,
+      total: count,
+      totalPages,
+      hasNext: pageNum < totalPages,
+      hasPrev: pageNum > 1
+    };
+    
+    res.status(200).json({
+      success: true,
+      data: data || [],
+      pagination,
+      searchTerm: searchQuery
+    });
+    
+  } catch (error) {
+    console.error('Error searching RAG documents:', error);
+    res.status(500).json({ error: 'Failed to search documents.', details: error.message });
+  }
+});
+
+// Delete RAG document (admin only)
+app.delete('/api/admin/rag-documents/:id', async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database client not available.' });
+  
+  try {
+    const { id } = req.params;
+    
+    const { error } = await supabase
+      .from('rag_documents')
+      .delete()
+      .eq('id', id);
+    
+    if (error) {
+      console.error('Error deleting RAG document:', error);
+      return res.status(500).json({ error: 'Failed to delete document.', details: error.message });
+    }
+    
+    res.status(200).json({ 
+      success: true, 
+      message: 'Document deleted successfully.' 
+    });
+    
+  } catch (error) {
+    console.error('Error deleting RAG document:', error);
+    res.status(500).json({ error: 'Failed to delete document.', details: error.message });
+  }
+});
+
+// Generate embeddings for RAG documents
+app.post('/api/admin/rag-documents/generate-embeddings', async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database client not available.' });
+  
+  try {
+    console.log('🚀 Starting RAG document embedding generation...');
+    
+    // Set up Server-Sent Events
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Headers': 'Cache-Control'
+    });
+
+    // Send initial status
+    res.write(`data: ${JSON.stringify({ type: 'start', message: 'Starting RAG document embedding generation...' })}\n\n`);
+    
+    // Get documents without embeddings
+    const { data: documents, error: fetchError } = await supabase
+      .from('rag_documents')
+      .select('id, title, content')
+      .is('embedding', null)
+      .not('content', 'is', null)
+      .eq('is_active', true);
+
+    if (fetchError) {
+      console.error('Error fetching documents:', fetchError);
+      res.write(`data: ${JSON.stringify({ type: 'error', error: 'Failed to fetch documents' })}\n\n`);
+      res.end();
+      return;
+    }
+
+    if (!documents || documents.length === 0) {
+      res.write(`data: ${JSON.stringify({ type: 'complete', message: 'All documents already have embeddings!', processed: 0, total: 0 })}\n\n`);
+      res.end();
+      return;
+    }
+
+    let processed = 0;
+    let errors = 0;
+    const total = documents.length;
+
+    // Send total count
+    res.write(`data: ${JSON.stringify({ type: 'total', total: total })}\n\n`);
+
+    // Process documents in batches
+    const batchSize = 5;
+    const batches = [];
+    for (let i = 0; i < documents.length; i += batchSize) {
+      batches.push(documents.slice(i, i + batchSize));
+    }
+
+    for (const batch of batches) {
+      for (const document of batch) {
+        try {
+          // Combine title and content for embedding
+          const textToEmbed = `${document.title}\n\n${document.content}`;
+          
+          console.log(`🔄 Processing document ${document.id}: "${document.title.substring(0, 50)}..."`);
+          
+          const embedding = await generateEmbedding(textToEmbed);
+          
+          if (embedding) {
+            // Update the document with the embedding
+            const { error: updateError } = await supabase
+              .from('rag_documents')
+              .update({ embedding: embedding })
+              .eq('id', document.id);
+
+            if (updateError) {
+              console.error(`❌ Error updating document ${document.id}:`, updateError);
+              errors++;
+            } else {
+              console.log(`✅ Successfully generated embedding for document ${document.id}`);
+              processed++;
+            }
+          } else {
+            console.error(`❌ Failed to generate embedding for document ${document.id}`);
+            errors++;
+          }
+
+          // Send progress update
+          res.write(`data: ${JSON.stringify({ 
+            type: 'progress', 
+            processed: processed + errors, 
+            total: total, 
+            current: document.title.substring(0, 50) + '...' 
+          })}\n\n`);
+
+          // Add a small delay to avoid rate limiting
+          await new Promise(resolve => setTimeout(resolve, 200));
+
+        } catch (error) {
+          console.error(`❌ Error processing document ${document.id}:`, error);
+          errors++;
+        }
+      }
+    }
+
+    // Send completion status
+    res.write(`data: ${JSON.stringify({ 
+      type: 'complete', 
+      message: 'RAG document embedding generation complete!', 
+      processed: processed, 
+      errors: errors,
+      total: total 
+    })}\n\n`);
+    
+    res.end();
+
+  } catch (error) {
+    console.error('❌ Fatal error in RAG document embedding generation:', error);
+    res.write(`data: ${JSON.stringify({ type: 'error', error: 'Failed to generate embeddings' })}\n\n`);
+    res.end();
+  }
+});
+
 // --- Server Initialization ---
 app.listen(process.env.PORT || 3001, () => {
     console.log(`Backend server listening on port ${process.env.PORT || 3001}`);
