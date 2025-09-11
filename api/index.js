@@ -1615,14 +1615,72 @@ app.post('/api/admin/rag-documents/upload', upload.single('file'), async (req, r
       }
     }
     
+    // Generate embeddings automatically
+    console.log(`Generating embeddings for document: ${documentData.title}`);
+    let embeddingStatus = 'pending';
+    
+    try {
+      // Generate embedding for document content
+      const documentEmbedding = await generateEmbedding(documentData.content);
+      
+      if (documentEmbedding) {
+        // Update document with embedding
+        await supabase
+          .from('rag_documents')
+          .update({ embedding: documentEmbedding })
+          .eq('id', documentData.id);
+        
+        console.log('Document embedding generated successfully');
+      }
+      
+      // Generate embeddings for chunks
+      if (processedDocument.chunks && processedDocument.chunks.length > 0) {
+        console.log(`Generating embeddings for ${processedDocument.chunks.length} chunks...`);
+        
+        const { data: chunks, error: chunksError } = await supabase
+          .from('rag_document_chunks')
+          .select('*')
+          .eq('document_id', documentData.id)
+          .order('chunk_index');
+        
+        if (!chunksError && chunks) {
+          for (const chunk of chunks) {
+            try {
+              const chunkEmbedding = await generateEmbedding(chunk.chunk_text);
+              
+              if (chunkEmbedding) {
+                await supabase
+                  .from('rag_document_chunks')
+                  .update({ embedding: chunkEmbedding })
+                  .eq('id', chunk.id);
+              }
+            } catch (chunkError) {
+              console.error(`Error generating embedding for chunk ${chunk.chunk_index}:`, chunkError);
+            }
+          }
+          console.log('Chunk embeddings generated successfully');
+        }
+      }
+      
+      embeddingStatus = 'completed';
+      
+    } catch (embeddingError) {
+      console.error('Error generating embeddings:', embeddingError);
+      embeddingStatus = 'failed';
+      // Don't fail the entire operation, embeddings can be generated later
+    }
+    
     res.status(201).json({ 
       success: true, 
-      message: uploadedFile ? 'Document uploaded and processed successfully!' : 'Document saved successfully!',
+      message: uploadedFile 
+        ? `Document uploaded, processed, and embeddings generated! (${processedDocument.wordCount} words, ${processedDocument.chunkCount} chunks)`
+        : 'Document saved and embeddings generated!',
       document: {
         ...documentData,
         wordCount: processedDocument.wordCount,
         chunkCount: processedDocument.chunkCount,
-        chunks: processedDocument.chunks?.length || 0
+        chunks: processedDocument.chunks?.length || 0,
+        embeddingStatus: embeddingStatus
       }
     });
     
