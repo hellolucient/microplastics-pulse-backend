@@ -54,10 +54,10 @@ router.post('/', async (req, res) => {
   }
 });
 
-// Generate embeddings endpoint with Server-Sent Events for progress
+// Unified embeddings endpoint with Server-Sent Events for progress (articles + RAG documents)
 router.post('/generate-embeddings', async (req, res) => {
   try {
-    console.log('🚀 Starting embedding generation via API...');
+    console.log('🚀 Starting unified embedding generation (articles + RAG documents)...');
     
     // Set up Server-Sent Events
     res.writeHead(200, {
@@ -69,90 +69,232 @@ router.post('/generate-embeddings', async (req, res) => {
     });
 
     // Send initial status
-    res.write(`data: ${JSON.stringify({ type: 'start', message: 'Starting embedding generation...' })}\n\n`);
+    res.write(`data: ${JSON.stringify({ type: 'start', message: 'Starting unified embedding generation...' })}\n\n`);
     
-    // Get articles without embeddings
-    const { data: articles, error: fetchError } = await supabase
+    // PHASE 1: Process articles without embeddings
+    res.write(`data: ${JSON.stringify({ type: 'phase', message: 'Processing articles...' })}\n\n`);
+    
+    const { data: articles, error: articlesError } = await supabase
       .from('latest_news')
       .select('id, title, ai_summary')
       .is('embedding', null)
       .not('ai_summary', 'is', null);
 
-    if (fetchError) {
-      console.error('Error fetching articles:', fetchError);
+    if (articlesError) {
+      console.error('Error fetching articles:', articlesError);
       res.write(`data: ${JSON.stringify({ type: 'error', error: 'Failed to fetch articles' })}\n\n`);
       res.end();
       return;
     }
 
-    if (!articles || articles.length === 0) {
-      res.write(`data: ${JSON.stringify({ type: 'complete', message: 'All articles already have embeddings!', processed: 0, total: 0 })}\n\n`);
-      res.end();
-      return;
-    }
+    let articlesProcessed = 0;
+    let articlesErrors = 0;
+    const articlesTotal = articles ? articles.length : 0;
 
-    let processed = 0;
-    let errors = 0;
-    const total = articles.length;
+    if (articlesTotal > 0) {
+      res.write(`data: ${JSON.stringify({ type: 'articles_total', total: articlesTotal })}\n\n`);
 
-    // Send total count
-    res.write(`data: ${JSON.stringify({ type: 'total', total: total })}\n\n`);
+      // Process articles in batches
+      const batchSize = 10;
+      const batches = [];
+      for (let i = 0; i < articles.length; i += batchSize) {
+        batches.push(articles.slice(i, i + batchSize));
+      }
 
-    // Process articles in batches to avoid timeout
-    const batchSize = 10;
-    const batches = [];
-    for (let i = 0; i < articles.length; i += batchSize) {
-      batches.push(articles.slice(i, i + batchSize));
-    }
+      for (const batch of batches) {
+        for (const article of batch) {
+          try {
+            const textToEmbed = `${article.title}\n\n${article.ai_summary}`;
+            const embedding = await generateEmbedding(textToEmbed);
+            
+            if (embedding) {
+              const { error: updateError } = await supabase
+                .from('latest_news')
+                .update({ embedding: embedding })
+                .eq('id', article.id);
 
-    for (const batch of batches) {
-      for (const article of batch) {
-        try {
-          const textToEmbed = `${article.title}\n\n${article.ai_summary}`;
-          const embedding = await generateEmbedding(textToEmbed);
-          
-          if (embedding) {
-            const { error: updateError } = await supabase
-              .from('latest_news')
-              .update({ embedding: embedding })
-              .eq('id', article.id);
-
-            if (updateError) {
-              console.error(`Error updating article ${article.id}:`, updateError);
-              errors++;
+              if (updateError) {
+                console.error(`Error updating article ${article.id}:`, updateError);
+                articlesErrors++;
+              } else {
+                articlesProcessed++;
+              }
             } else {
-              processed++;
+              articlesErrors++;
             }
-          } else {
-            errors++;
+
+            // Send progress update every 10 articles
+            if ((articlesProcessed + articlesErrors) % 10 === 0) {
+              const progress = Math.round(((articlesProcessed + articlesErrors) / articlesTotal) * 100);
+              res.write(`data: ${JSON.stringify({ type: 'articles_progress', processed: articlesProcessed + articlesErrors, total: articlesTotal, progress: progress })}\n\n`);
+            }
+
+            // Small delay to avoid rate limiting
+            await new Promise(resolve => setTimeout(resolve, 50));
+
+          } catch (error) {
+            console.error(`Error processing article ${article.id}:`, error.message);
+            articlesErrors++;
           }
-
-          // Send progress update every 10 articles
-          if (processed % 10 === 0 || processed === total) {
-            const progress = Math.round((processed / total) * 100);
-            console.log(`📈 Progress: ${processed}/${total} (${progress}%)`);
-            res.write(`data: ${JSON.stringify({ type: 'progress', processed: processed, total: total, progress: progress })}\n\n`);
-          }
-
-          // Small delay to avoid rate limiting
-          await new Promise(resolve => setTimeout(resolve, 50));
-
-        } catch (error) {
-          console.error(`Error processing article ${article.id}:`, error.message);
-          console.error(`Article title: ${article.title}`);
-          console.error(`Article summary length: ${article.ai_summary?.length || 0}`);
-          errors++;
         }
       }
     }
 
-    // Send completion
-    res.write(`data: ${JSON.stringify({ type: 'complete', message: 'Embedding generation complete!', processed: processed, errors: errors, total: total })}\n\n`);
-    res.write('data: [DONE]\n\n');
+    // PHASE 2: Process RAG documents without embeddings
+    res.write(`data: ${JSON.stringify({ type: 'phase', message: 'Processing RAG documents...' })}\n\n`);
+    
+    const { data: documents, error: documentsError } = await supabase
+      .from('rag_documents')
+      .select('id, title, content')
+      .is('embedding', null)
+      .not('content', 'is', null)
+      .eq('is_active', true);
+
+    if (documentsError) {
+      console.error('Error fetching documents:', documentsError);
+      res.write(`data: ${JSON.stringify({ type: 'error', error: 'Failed to fetch documents' })}\n\n`);
+      res.end();
+      return;
+    }
+
+    let documentsProcessed = 0;
+    let documentsErrors = 0;
+    const documentsTotal = documents ? documents.length : 0;
+
+    if (documentsTotal > 0) {
+      res.write(`data: ${JSON.stringify({ type: 'documents_total', total: documentsTotal })}\n\n`);
+
+      // Process documents in smaller batches
+      const docBatchSize = 5;
+      const docBatches = [];
+      for (let i = 0; i < documents.length; i += docBatchSize) {
+        docBatches.push(documents.slice(i, i + docBatchSize));
+      }
+
+      for (const batch of docBatches) {
+        for (const document of batch) {
+          try {
+            const textToEmbed = `${document.title}\n\n${document.content}`;
+            const embedding = await generateEmbedding(textToEmbed);
+            
+            if (embedding) {
+              const { error: updateError } = await supabase
+                .from('rag_documents')
+                .update({ embedding: embedding })
+                .eq('id', document.id);
+
+              if (updateError) {
+                console.error(`Error updating document ${document.id}:`, updateError);
+                documentsErrors++;
+              } else {
+                documentsProcessed++;
+              }
+            } else {
+              documentsErrors++;
+            }
+
+            // Send progress update
+            const progress = Math.round(((documentsProcessed + documentsErrors) / documentsTotal) * 100);
+            res.write(`data: ${JSON.stringify({ type: 'documents_progress', processed: documentsProcessed + documentsErrors, total: documentsTotal, progress: progress })}\n\n`);
+
+            // Small delay to avoid rate limiting
+            await new Promise(resolve => setTimeout(resolve, 200));
+
+          } catch (error) {
+            console.error(`Error processing document ${document.id}:`, error);
+            documentsErrors++;
+          }
+        }
+      }
+    }
+
+    // PHASE 3: Process RAG document chunks without embeddings
+    res.write(`data: ${JSON.stringify({ type: 'phase', message: 'Processing document chunks...' })}\n\n`);
+    
+    const { data: chunks, error: chunksError } = await supabase
+      .from('rag_document_chunks')
+      .select('id, document_id, chunk_index, chunk_text')
+      .is('embedding', null)
+      .not('chunk_text', 'is', null);
+    
+    if (chunksError) {
+      console.error('Error fetching chunks:', chunksError);
+      res.write(`data: ${JSON.stringify({ type: 'error', error: 'Failed to fetch chunks' })}\n\n`);
+      res.end();
+      return;
+    }
+
+    let chunksProcessed = 0;
+    let chunksErrors = 0;
+    const chunksTotal = chunks ? chunks.length : 0;
+
+    if (chunksTotal > 0) {
+      res.write(`data: ${JSON.stringify({ type: 'chunks_total', total: chunksTotal })}\n\n`);
+      
+      // Process chunks in smaller batches
+      const chunkBatchSize = 20;
+      const chunkBatches = [];
+      for (let i = 0; i < chunks.length; i += chunkBatchSize) {
+        chunkBatches.push(chunks.slice(i, i + chunkBatchSize));
+      }
+      
+      for (const batch of chunkBatches) {
+        for (const chunk of batch) {
+          try {
+            const embedding = await generateEmbedding(chunk.chunk_text);
+            
+            if (embedding) {
+              const { error: updateError } = await supabase
+                .from('rag_document_chunks')
+                .update({ embedding: embedding })
+                .eq('id', chunk.id);
+              
+              if (updateError) {
+                console.error(`Error updating chunk ${chunk.id}:`, updateError);
+                chunksErrors++;
+              } else {
+                chunksProcessed++;
+              }
+            } else {
+              chunksErrors++;
+            }
+            
+            // Send progress update every 10 chunks
+            if ((chunksProcessed + chunksErrors) % 10 === 0) {
+              const progress = Math.round(((chunksProcessed + chunksErrors) / chunksTotal) * 100);
+              res.write(`data: ${JSON.stringify({ type: 'chunks_progress', processed: chunksProcessed + chunksErrors, total: chunksTotal, progress: progress })}\n\n`);
+            }
+            
+            // Small delay to avoid rate limiting
+            await new Promise(resolve => setTimeout(resolve, 100));
+            
+          } catch (error) {
+            console.error(`Error processing chunk ${chunk.id}:`, error);
+            chunksErrors++;
+          }
+        }
+      }
+    }
+
+    // Send final completion status
+    res.write(`data: ${JSON.stringify({ 
+      type: 'complete', 
+      message: 'Unified embedding generation complete!', 
+      articles_processed: articlesProcessed, 
+      articles_errors: articlesErrors,
+      articles_total: articlesTotal,
+      documents_processed: documentsProcessed,
+      documents_errors: documentsErrors,
+      documents_total: documentsTotal,
+      chunks_processed: chunksProcessed,
+      chunks_errors: chunksErrors,
+      chunks_total: chunksTotal
+    })}\n\n`);
+    
     res.end();
 
   } catch (error) {
-    console.error('Embedding generation API error:', error);
+    console.error('Unified embedding generation API error:', error);
     res.write(`data: ${JSON.stringify({ type: 'error', error: 'Failed to generate embeddings' })}\n\n`);
     res.end();
   }

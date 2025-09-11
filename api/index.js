@@ -2002,13 +2002,89 @@ app.post('/api/admin/rag-documents/generate-embeddings', async (req, res) => {
       }
     }
 
-    // Send completion status
+    // Now process chunks for documents that have embeddings
+    res.write(`data: ${JSON.stringify({ type: 'phase', message: 'Processing document chunks...' })}\n\n`);
+    
+    let chunkProcessed = 0;
+    let chunkErrors = 0;
+    
+    // Get all chunks without embeddings
+    const { data: chunks, error: chunksError } = await supabase
+      .from('rag_document_chunks')
+      .select('id, document_id, chunk_index, chunk_text')
+      .is('embedding', null)
+      .not('chunk_text', 'is', null);
+    
+    if (chunksError) {
+      console.error('Error fetching chunks:', chunksError);
+      res.write(`data: ${JSON.stringify({ type: 'error', error: 'Failed to fetch chunks' })}\n\n`);
+      res.end();
+      return;
+    }
+    
+    if (chunks && chunks.length > 0) {
+      res.write(`data: ${JSON.stringify({ type: 'chunk_total', total: chunks.length })}\n\n`);
+      
+      // Process chunks in smaller batches
+      const chunkBatchSize = 20;
+      const chunkBatches = [];
+      for (let i = 0; i < chunks.length; i += chunkBatchSize) {
+        chunkBatches.push(chunks.slice(i, i + chunkBatchSize));
+      }
+      
+      for (const batch of chunkBatches) {
+        for (const chunk of batch) {
+          try {
+            const embedding = await generateEmbedding(chunk.chunk_text);
+            
+            if (embedding) {
+              const { error: updateError } = await supabase
+                .from('rag_document_chunks')
+                .update({ embedding: embedding })
+                .eq('id', chunk.id);
+              
+              if (updateError) {
+                console.error(`❌ Error updating chunk ${chunk.id}:`, updateError);
+                chunkErrors++;
+              } else {
+                chunkProcessed++;
+              }
+            } else {
+              chunkErrors++;
+            }
+            
+            // Send progress update every 10 chunks
+            if ((chunkProcessed + chunkErrors) % 10 === 0) {
+              const progress = Math.round(((chunkProcessed + chunkErrors) / chunks.length) * 100);
+              res.write(`data: ${JSON.stringify({ 
+                type: 'chunk_progress', 
+                processed: chunkProcessed + chunkErrors, 
+                total: chunks.length, 
+                progress: progress 
+              })}\n\n`);
+            }
+            
+            // Small delay to avoid rate limiting
+            await new Promise(resolve => setTimeout(resolve, 100));
+            
+          } catch (error) {
+            console.error(`❌ Error processing chunk ${chunk.id}:`, error);
+            chunkErrors++;
+          }
+        }
+      }
+    }
+    
+    // Send final completion status
     res.write(`data: ${JSON.stringify({ 
       type: 'complete', 
-      message: 'RAG document embedding generation complete!', 
-      processed: processed, 
-      errors: errors,
-      total: total 
+      message: 'RAG document and chunk embedding generation complete!', 
+      documents_processed: processed, 
+      documents_errors: errors,
+      chunks_processed: chunkProcessed,
+      chunks_errors: chunkErrors,
+      total_documents: total,
+      total_chunks: chunks ? chunks.length : 0
     })}\n\n`);
     
     res.end();
@@ -2017,6 +2093,47 @@ app.post('/api/admin/rag-documents/generate-embeddings', async (req, res) => {
     console.error('❌ Fatal error in RAG document embedding generation:', error);
     res.write(`data: ${JSON.stringify({ type: 'error', error: 'Failed to generate embeddings' })}\n\n`);
     res.end();
+  }
+});
+
+// Get RAG document status endpoint
+app.get('/api/admin/rag-documents/status', async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database client not available.' });
+  
+  try {
+    const { data: documents, error } = await supabase
+      .from('rag_documents')
+      .select(`
+        id,
+        title,
+        file_type,
+        embedding,
+        rag_document_chunks (
+          id,
+          embedding
+        )
+      `)
+      .eq('is_active', true);
+
+    if (error) {
+      console.error('Error fetching document status:', error);
+      return res.status(500).json({ error: 'Failed to fetch document status' });
+    }
+
+    const documentStatus = documents.map(doc => ({
+      id: doc.id,
+      title: doc.title,
+      file_type: doc.file_type,
+      doc_status: doc.embedding ? 'Has Doc Embedding' : 'No Doc Embedding',
+      total_chunks: doc.rag_document_chunks.length,
+      chunks_with_embeddings: doc.rag_document_chunks.filter(chunk => chunk.embedding).length,
+      chunks_without_embeddings: doc.rag_document_chunks.filter(chunk => !chunk.embedding).length
+    }));
+
+    res.json(documentStatus);
+  } catch (error) {
+    console.error('Error in document status endpoint:', error);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
