@@ -575,6 +575,61 @@ app.get('/api/latest-news', async (req, res) => {
   }
 });
 
+// Search endpoint for Latest News page
+app.get('/api/latest-news/search', async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database client not available.' });
+  
+  try {
+    const { q: searchTerm, page = 1, limit = 20 } = req.query;
+    
+    if (!searchTerm || searchTerm.trim().length === 0) {
+      return res.status(400).json({ error: 'Search term is required.' });
+    }
+
+    const searchQuery = searchTerm.toLowerCase().trim();
+    const pageNum = parseInt(page);
+    const limitNum = parseInt(limit);
+    const offset = (pageNum - 1) * limitNum;
+
+    // Search across title, ai_summary, and source fields
+    const { data, error, count } = await supabase
+      .from('latest_news')
+      .select('*', { count: 'exact' })
+      .or(`title.ilike.%${searchQuery}%,ai_summary.ilike.%${searchQuery}%,source.ilike.%${searchQuery}%`)
+      .order('processed_at', { ascending: false })
+      .range(offset, offset + limitNum - 1);
+
+    if (error) {
+      console.error('Error searching latest news:', error);
+      return res.status(500).json({ error: 'Failed to search latest news.' });
+    }
+
+    // Calculate pagination info
+    const totalPages = Math.ceil(count / limitNum);
+    const pagination = {
+      page: pageNum,
+      limit: limitNum,
+      total: count,
+      totalPages,
+      hasNext: pageNum < totalPages,
+      hasPrev: pageNum > 1
+    };
+
+    // Return search results
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.status(200).json({
+      data: data || [],
+      pagination,
+      searchTerm: searchQuery,
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('Error in search endpoint:', error);
+    res.status(500).json({ error: 'Failed to search latest news.' });
+  }
+});
+
 app.get('/api/story/:id', async (req, res) => {
   if (!supabase) return res.status(503).json({ error: 'Database service is unavailable' });
   const { id } = req.params;
