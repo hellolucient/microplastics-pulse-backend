@@ -1863,12 +1863,16 @@ app.get('/api/rag-documents/public/search', async (req, res) => {
     const limitNum = parseInt(limit);
     
     // Generate embedding for the search query
+    console.log(`[Search] Attempting semantic search for: "${searchTerm}"`);
     const queryEmbedding = await generateEmbedding(searchTerm);
     
     if (!queryEmbedding) {
+      console.log(`[Search] Embedding generation failed, falling back to text search`);
       // Fallback to text search if embedding fails
       return await searchDocumentsFallback(req, res, searchTerm, pageNum, limitNum);
     }
+    
+    console.log(`[Search] Embedding generated successfully, proceeding with semantic search`);
     
     // Get all public documents with embeddings
     const { data: documents, error: documentsError } = await supabase
@@ -1880,9 +1884,11 @@ app.get('/api/rag-documents/public/search', async (req, res) => {
       .not('content', 'is', null);
     
     if (documentsError) {
-      console.error('Error fetching documents with embeddings:', documentsError);
+      console.error('[Search] Error fetching documents with embeddings:', documentsError);
       return await searchDocumentsFallback(req, res, searchTerm, pageNum, limitNum);
     }
+    
+    console.log(`[Search] Found ${documents ? documents.length : 0} documents with embeddings`);
     
     if (!documents || documents.length === 0) {
       return res.status(200).json({
@@ -1934,7 +1940,7 @@ app.get('/api/rag-documents/public/search', async (req, res) => {
     });
     
   } catch (error) {
-    console.error('Error in semantic document search:', error);
+    console.error('[Search] Error in semantic document search:', error);
     return await searchDocumentsFallback(req, res, searchTerm, pageNum, limitNum);
   }
 });
@@ -1942,6 +1948,7 @@ app.get('/api/rag-documents/public/search', async (req, res) => {
 // Fallback text search function
 async function searchDocumentsFallback(req, res, searchTerm, pageNum, limitNum) {
   try {
+    console.log(`[Search] Using fallback text search for: "${searchTerm}"`);
     const searchQuery = searchTerm.toLowerCase().trim();
     const offset = (pageNum - 1) * limitNum;
     
@@ -1956,9 +1963,11 @@ async function searchDocumentsFallback(req, res, searchTerm, pageNum, limitNum) 
       .range(offset, offset + limitNum - 1);
     
     if (error) {
-      console.error('Error in fallback search:', error);
+      console.error('[Search] Error in fallback search:', error);
       return res.status(500).json({ error: 'Failed to search documents.', details: error.message });
     }
+    
+    console.log(`[Search] Fallback search found ${data ? data.length : 0} documents`);
     
     const totalCount = count || 0;
     const totalPages = Math.ceil(totalCount / limitNum);
