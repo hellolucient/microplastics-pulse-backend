@@ -521,13 +521,57 @@ app.post('/api/admin/failed-urls/clear', async (req, res) => {
 
 app.get('/api/latest-news', async (req, res) => {
   if (!supabase) return res.status(503).json({ error: 'Database client not available.' });
+  
   try {
-      const { data, error } = await supabase.from('latest_news').select('*').order('processed_at', { ascending: false });
-      if (error) throw error;
-      res.setHeader('Cache-Control', 'public, max-age=3600, stale-while-revalidate=86400');
-      res.status(200).json(data || []);
+    // Parse pagination parameters
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 1000;
+    const offset = (page - 1) * limit;
+
+    // Get total count
+    const { count, error: countError } = await supabase
+      .from('latest_news')
+      .select('*', { count: 'exact', head: true });
+
+    if (countError) {
+      console.error('Error fetching count:', countError);
+      return res.status(500).json({ error: 'Failed to fetch news count.' });
+    }
+
+    // Fetch paginated data
+    const { data, error } = await supabase
+      .from('latest_news')
+      .select('*')
+      .order('processed_at', { ascending: false })
+      .range(offset, offset + limit - 1);
+
+    if (error) {
+      console.error('Error fetching latest news:', error);
+      return res.status(500).json({ error: 'Failed to fetch latest news.' });
+    }
+
+    // Calculate pagination info
+    const totalPages = Math.ceil(count / limit);
+    const pagination = {
+      page,
+      limit,
+      total: count,
+      totalPages,
+      hasNext: page < totalPages,
+      hasPrev: page > 1
+    };
+
+    // Return paginated response
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.status(200).json({
+      data: data || [],
+      pagination,
+      timestamp: new Date().toISOString() // Force cache bust
+    });
+
   } catch (error) {
-      res.status(500).json({ error: 'Failed to fetch latest news.' });
+    console.error('Error fetching latest news:', error);
+    res.status(500).json({ error: 'Failed to fetch latest news.' });
   }
 });
 
