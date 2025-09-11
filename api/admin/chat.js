@@ -79,7 +79,6 @@ router.post('/generate-embeddings', async (req, res) => {
       .not('ai_summary', 'is', null);
 
     if (articlesError) {
-      console.error('Error fetching articles:', articlesError);
       res.write(`data: ${JSON.stringify({ type: 'error', error: 'Failed to fetch articles' })}\n\n`);
       res.end();
       return;
@@ -112,7 +111,6 @@ router.post('/generate-embeddings', async (req, res) => {
                 .eq('id', article.id);
 
               if (updateError) {
-                console.error(`Error updating article ${article.id}:`, updateError);
                 articlesErrors++;
               } else {
                 articlesProcessed++;
@@ -131,7 +129,6 @@ router.post('/generate-embeddings', async (req, res) => {
             await new Promise(resolve => setTimeout(resolve, 50));
 
           } catch (error) {
-            console.error(`Error processing article ${article.id}:`, error.message);
             articlesErrors++;
           }
         }
@@ -149,7 +146,6 @@ router.post('/generate-embeddings', async (req, res) => {
       .eq('is_active', true);
 
     if (documentsError) {
-      console.error('Error fetching documents:', documentsError);
       res.write(`data: ${JSON.stringify({ type: 'error', error: 'Failed to fetch documents' })}\n\n`);
       res.end();
       return;
@@ -182,7 +178,6 @@ router.post('/generate-embeddings', async (req, res) => {
                 .eq('id', document.id);
 
               if (updateError) {
-                console.error(`Error updating document ${document.id}:`, updateError);
                 documentsErrors++;
               } else {
                 documentsProcessed++;
@@ -199,7 +194,6 @@ router.post('/generate-embeddings', async (req, res) => {
             await new Promise(resolve => setTimeout(resolve, 200));
 
           } catch (error) {
-            console.error(`Error processing document ${document.id}:`, error);
             documentsErrors++;
           }
         }
@@ -216,7 +210,6 @@ router.post('/generate-embeddings', async (req, res) => {
       .not('chunk_text', 'is', null);
     
     if (chunksError) {
-      console.error('Error fetching chunks:', chunksError);
       res.write(`data: ${JSON.stringify({ type: 'error', error: 'Failed to fetch chunks' })}\n\n`);
       res.end();
       return;
@@ -248,7 +241,6 @@ router.post('/generate-embeddings', async (req, res) => {
                 .eq('id', chunk.id);
               
               if (updateError) {
-                console.error(`Error updating chunk ${chunk.id}:`, updateError);
                 chunksErrors++;
               } else {
                 chunksProcessed++;
@@ -267,7 +259,6 @@ router.post('/generate-embeddings', async (req, res) => {
             await new Promise(resolve => setTimeout(resolve, 100));
             
           } catch (error) {
-            console.error(`Error processing chunk ${chunk.id}:`, error);
             chunksErrors++;
           }
         }
@@ -292,7 +283,6 @@ router.post('/generate-embeddings', async (req, res) => {
     res.end();
 
   } catch (error) {
-    console.error('Unified embedding generation API error:', error);
     res.write(`data: ${JSON.stringify({ type: 'error', error: 'Failed to generate embeddings' })}\n\n`);
     res.end();
   }
