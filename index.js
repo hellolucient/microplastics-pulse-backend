@@ -1820,9 +1820,7 @@ app.get('/api/rag-documents/public', async (req, res) => {
     };
     
     res.status(200).json({
-      success: true,
-      data: data || [],
-      pagination
+      documents: data || []
     });
     
   } catch (error) {
@@ -2149,89 +2147,6 @@ app.get('/api/admin/rag-documents/status', async (req, res) => {
   }
 });
 
-// Public endpoints for Research Library
-
-// Get all public RAG documents
-app.get('/api/rag-documents/public', async (req, res) => {
-  if (!supabase) return res.status(503).json({ error: 'Database client not available.' });
-  
-  try {
-    const { data: documents, error } = await supabase
-      .from('rag_documents')
-      .select('id, title, content, file_type, metadata, created_at')
-      .eq('is_active', true)
-      .eq('access_level', 'public')
-      .order('created_at', { ascending: false });
-
-    if (error) {
-      console.error('Error fetching public documents:', error);
-      return res.status(500).json({ error: 'Failed to fetch documents' });
-    }
-
-    res.json({ documents: documents || [] });
-  } catch (error) {
-    console.error('Error in public documents endpoint:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-// Search public RAG documents
-app.get('/api/rag-documents/public/search', async (req, res) => {
-  if (!supabase) return res.status(503).json({ error: 'Database client not available.' });
-  
-  try {
-    const { q: query, page = 1, limit = 10 } = req.query;
-    
-    if (!query || query.trim().length === 0) {
-      return res.status(400).json({ error: 'Search query is required' });
-    }
-
-    const pageNum = parseInt(page);
-    const limitNum = parseInt(limit);
-    const offset = (pageNum - 1) * limitNum;
-
-    // Simple text search in title and content
-    const { data: documents, error } = await supabase
-      .from('rag_documents')
-      .select('id, title, content, file_type, metadata, created_at')
-      .eq('is_active', true)
-      .eq('access_level', 'public')
-      .or(`title.ilike.%${query}%,content.ilike.%${query}%`)
-      .order('created_at', { ascending: false })
-      .range(offset, offset + limitNum - 1);
-
-    if (error) {
-      console.error('Error searching public documents:', error);
-      return res.status(500).json({ error: 'Failed to search documents' });
-    }
-
-    // Get total count for pagination
-    const { count, error: countError } = await supabase
-      .from('rag_documents')
-      .select('*', { count: 'exact', head: true })
-      .eq('is_active', true)
-      .eq('access_level', 'public')
-      .or(`title.ilike.%${query}%,content.ilike.%${query}%`);
-
-    if (countError) {
-      console.error('Error counting search results:', countError);
-      return res.status(500).json({ error: 'Failed to count results' });
-    }
-
-    const totalPages = Math.ceil((count || 0) / limitNum);
-
-    res.json({
-      documents: documents || [],
-      total: count || 0,
-      page: pageNum,
-      totalPages,
-      query: query
-    });
-  } catch (error) {
-    console.error('Error in public search endpoint:', error);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
 
 // --- Server Initialization ---
 app.listen(process.env.PORT || 3001, () => {
