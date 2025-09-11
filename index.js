@@ -10,6 +10,7 @@ const { postSingleTweet } = require('../lib/twitterService');
 const { runScheduledTasks, runEmailCheck } = require('../lib/automation');
 const multer = require('multer');
 const DocumentProcessor = require('../lib/documentProcessor');
+const { OpenAI } = require('openai');
 const {
   supabase,
   processQueryAndSave,
@@ -29,6 +30,31 @@ const app = express();
 
 // Initialize document processor
 const documentProcessor = new DocumentProcessor();
+
+// Initialize OpenAI client
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
+// Generate embedding for text using OpenAI
+async function generateEmbedding(text) {
+  try {
+    if (!text || text.trim().length === 0) {
+      console.error('Empty text provided for embedding');
+      return null;
+    }
+
+    const response = await openai.embeddings.create({
+      model: "text-embedding-3-small",
+      input: text,
+    });
+
+    return response.data[0].embedding;
+  } catch (error) {
+    console.error('Error generating embedding:', error);
+    return null;
+  }
+}
 
 // Configure multer for file uploads
 const upload = multer({
@@ -1644,7 +1670,11 @@ app.post('/api/admin/rag-documents/upload', upload.single('file'), async (req, r
           .order('chunk_index');
         
         if (!chunksError && chunks) {
-          for (const chunk of chunks) {
+          // Limit to first 10 chunks for now to avoid timeout
+          const chunksToProcess = chunks.slice(0, 10);
+          console.log(`Processing ${chunksToProcess.length} chunks (limited from ${chunks.length} total)...`);
+          
+          for (const chunk of chunksToProcess) {
             try {
               const chunkEmbedding = await generateEmbedding(chunk.chunk_text);
               
@@ -1658,7 +1688,7 @@ app.post('/api/admin/rag-documents/upload', upload.single('file'), async (req, r
               console.error(`Error generating embedding for chunk ${chunk.chunk_index}:`, chunkError);
             }
           }
-          console.log('Chunk embeddings generated successfully');
+          console.log(`Chunk embeddings generated for ${chunksToProcess.length} chunks`);
         }
       }
       
