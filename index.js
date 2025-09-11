@@ -44,9 +44,21 @@ async function generateEmbedding(text) {
       return null;
     }
 
+    // Estimate tokens (roughly 4 characters per token for English text)
+    const estimatedTokens = Math.ceil(text.length / 4);
+    const maxTokens = 8000; // Leave some buffer below the 8192 limit
+
+    let textToEmbed = text;
+    if (estimatedTokens > maxTokens) {
+      // Truncate text to fit within token limit
+      const maxChars = maxTokens * 4;
+      textToEmbed = text.substring(0, maxChars);
+      console.log(`Text truncated from ${text.length} to ${textToEmbed.length} characters (${estimatedTokens} → ~${maxTokens} tokens)`);
+    }
+
     const response = await openai.embeddings.create({
       model: "text-embedding-3-small",
-      input: text,
+      input: textToEmbed,
     });
 
     return response.data[0].embedding;
