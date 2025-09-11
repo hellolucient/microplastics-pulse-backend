@@ -1798,7 +1798,7 @@ app.get('/api/rag-documents/public', async (req, res) => {
     
     const { data, error, count } = await supabase
       .from('rag_documents')
-      .select('id, title, file_type, file_size, metadata, created_at', { count: 'exact' })
+      .select('id, title, content, file_type, file_size, metadata, created_at', { count: 'exact' })
       .eq('is_active', true)
       .eq('access_level', 'public')
       .order('created_at', { ascending: false })
