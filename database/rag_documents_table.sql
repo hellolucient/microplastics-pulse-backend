@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS rag_documents (
     file_size INTEGER, -- File size in bytes
     embedding JSONB, -- OpenAI embeddings for semantic search
     metadata JSONB, -- Additional document metadata (author, date, etc.)
-    access_level VARCHAR(20) DEFAULT 'admin' CHECK (access_level IN ('public', 'admin', 'restricted')),
+           access_level VARCHAR(20) DEFAULT 'admin' CHECK (access_level IN ('public', 'admin')),
     uploaded_by VARCHAR(255), -- Admin email who uploaded
     is_active BOOLEAN DEFAULT true,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
