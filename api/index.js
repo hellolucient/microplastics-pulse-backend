@@ -2342,7 +2342,7 @@ async function uploadFileToStorage(fileBuffer, fileName, bucketName = 'rag-docum
   try {
     const supabaseStorage = createClient(
       process.env.SUPABASE_URL,
-      process.env.SUPABASE_SERVICE_ROLE_KEY
+      process.env.SUPABASE_SERVICE_KEY
     );
     
     // Generate unique filename to avoid conflicts
