@@ -1910,7 +1910,7 @@ function performEnhancedDocumentSearch(documents, searchQuery) {
         created_at: doc.created_at,
         relevanceScore: relevanceScore,
         titleMatch: titleMatch,
-        contentMatches: contentMatches.slice(0, 3), // Limit to top 3 matches
+        contentMatches: contentMatches.slice(0, 10), // Show up to 10 matches
         totalMatches: contentMatches.length
       });
     }
