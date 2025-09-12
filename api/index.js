@@ -11,6 +11,7 @@ const { runScheduledTasks, runEmailCheck } = require('../lib/automation');
 const multer = require('multer');
 const DocumentProcessor = require('../lib/documentProcessor');
 const { OpenAI } = require('openai');
+const { createClient } = require('@supabase/supabase-js');
 const {
   supabase,
   processQueryAndSave,
@@ -1574,6 +1575,11 @@ app.post('/api/admin/rag-documents/upload', upload.single('file'), async (req, r
       // Validate file
       documentProcessor.validateFile(uploadedFile.buffer, uploadedFile.originalname, uploadedFile.mimetype);
       
+      // Upload file to Supabase Storage
+      console.log('Uploading file to Supabase Storage...');
+      const storageResult = await uploadFileToStorage(uploadedFile.buffer, uploadedFile.originalname);
+      console.log(`File uploaded to: ${storageResult.publicUrl}`);
+      
       // Process document
       processedDocument = await documentProcessor.processDocument(
         uploadedFile.buffer, 
@@ -1591,7 +1597,9 @@ app.post('/api/admin/rag-documents/upload', upload.single('file'), async (req, r
         ...processedDocument.metadata,
         ...JSON.parse(metadata || '{}'),
         uploadedFilename: uploadedFile.originalname,
-        uploadedMimeType: uploadedFile.mimetype
+        uploadedMimeType: uploadedFile.mimetype,
+        storageFileName: storageResult.fileName,
+        storageUrl: storageResult.publicUrl
       };
       
     } else {
@@ -1619,7 +1627,7 @@ app.post('/api/admin/rag-documents/upload', upload.single('file'), async (req, r
         title: processedDocument.title,
         content: processedDocument.content,
         file_type: processedDocument.fileType,
-        file_url: fileUrl,
+        file_url: uploadedFile ? processedDocument.metadata.storageUrl : fileUrl,
         file_size: processedDocument.fileSize,
         metadata: processedDocument.metadata,
         access_level: accessLevel,
@@ -2041,7 +2049,7 @@ app.get('/api/rag-documents/public/:id', async (req, res) => {
     
     const { data: document, error } = await supabase
       .from('rag_documents')
-      .select('id, title, content, file_type, file_size, metadata, created_at')
+      .select('id, title, content, file_type, file_size, file_url, metadata, created_at')
       .eq('id', id)
       .eq('is_active', true)
       .eq('access_level', 'public')
@@ -2328,6 +2336,57 @@ app.get('/api/admin/rag-documents/status', async (req, res) => {
   }
 });
 
+
+// Function to upload file to Supabase Storage
+async function uploadFileToStorage(fileBuffer, fileName, bucketName = 'rag-documents') {
+  try {
+    const supabaseStorage = createClient(
+      process.env.SUPABASE_URL,
+      process.env.SUPABASE_SERVICE_ROLE_KEY
+    );
+    
+    // Generate unique filename to avoid conflicts
+    const timestamp = Date.now();
+    const fileExtension = fileName.split('.').pop();
+    const uniqueFileName = `${timestamp}-${fileName}`;
+    
+    const { data, error } = await supabaseStorage.storage
+      .from(bucketName)
+      .upload(uniqueFileName, fileBuffer, {
+        contentType: getMimeType(fileExtension),
+        upsert: false
+      });
+    
+    if (error) {
+      console.error('Error uploading to Supabase Storage:', error);
+      throw error;
+    }
+    
+    // Get public URL
+    const { data: urlData } = supabaseStorage.storage
+      .from(bucketName)
+      .getPublicUrl(uniqueFileName);
+    
+    return {
+      fileName: uniqueFileName,
+      publicUrl: urlData.publicUrl
+    };
+  } catch (error) {
+    console.error('Error in uploadFileToStorage:', error);
+    throw error;
+  }
+}
+
+// Helper function to get MIME type
+function getMimeType(extension) {
+  const mimeTypes = {
+    'pdf': 'application/pdf',
+    'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'doc': 'application/msword',
+    'txt': 'text/plain'
+  };
+  return mimeTypes[extension.toLowerCase()] || 'application/octet-stream';
+}
 
 // --- Server Initialization ---
 app.listen(process.env.PORT || 3001, () => {
