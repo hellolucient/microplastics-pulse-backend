@@ -1920,12 +1920,39 @@ function performEnhancedDocumentSearch(documents, searchQuery) {
   return results.sort((a, b) => b.relevanceScore - a.relevanceScore);
 }
 
+// Get list of public documents for filtering
+app.get('/api/rag-documents/public/list', async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database client not available.' });
+  
+  try {
+    const { data: documents, error } = await supabase
+      .from('rag_documents')
+      .select('id, title, file_type, created_at')
+      .eq('is_active', true)
+      .eq('access_level', 'public')
+      .order('created_at', { ascending: false });
+    
+    if (error) {
+      console.error('Error fetching document list:', error);
+      return res.status(500).json({ error: 'Failed to fetch document list.', details: error.message });
+    }
+    
+    res.status(200).json({
+      documents: documents || []
+    });
+    
+  } catch (error) {
+    console.error('Error fetching document list:', error);
+    res.status(500).json({ error: 'Failed to fetch document list.', details: error.message });
+  }
+});
+
 // Search public RAG documents with enhanced results
 app.get('/api/rag-documents/public/search', async (req, res) => {
   if (!supabase) return res.status(503).json({ error: 'Database client not available.' });
   
   try {
-    const { q: searchTerm, page = 1, limit = 20 } = req.query;
+    const { q: searchTerm, page = 1, limit = 20, documentIds } = req.query;
     
     if (!searchTerm || searchTerm.trim().length === 0) {
       return res.status(400).json({ error: 'Search term is required.' });
@@ -1935,13 +1962,26 @@ app.get('/api/rag-documents/public/search', async (req, res) => {
     const pageNum = parseInt(page);
     const limitNum = parseInt(limit);
     
-    // Get all public documents with content for searching
-    const { data: allDocuments, error: fetchError } = await supabase
+    // Parse document IDs filter if provided
+    let documentIdsArray = null;
+    if (documentIds && documentIds.trim()) {
+      documentIdsArray = documentIds.split(',').map(id => id.trim()).filter(id => id);
+    }
+    
+    // Build query for documents
+    let query = supabase
       .from('rag_documents')
       .select('id, title, content, file_type, file_size, metadata, created_at')
       .eq('is_active', true)
       .eq('access_level', 'public')
       .not('content', 'is', null);
+    
+    // Apply document filter if specified
+    if (documentIdsArray && documentIdsArray.length > 0) {
+      query = query.in('id', documentIdsArray);
+    }
+    
+    const { data: allDocuments, error: fetchError } = await query;
     
     if (fetchError) {
       console.error('Error fetching documents:', fetchError);
