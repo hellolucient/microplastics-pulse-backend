@@ -2028,6 +2028,40 @@ app.get('/api/rag-documents/public/search', async (req, res) => {
   }
 });
 
+// Get individual public document by ID
+app.get('/api/rag-documents/public/:id', async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database client not available.' });
+  
+  try {
+    const { id } = req.params;
+    
+    const { data: document, error } = await supabase
+      .from('rag_documents')
+      .select('id, title, content, file_type, file_size, file_url, metadata, created_at')
+      .eq('id', id)
+      .eq('is_active', true)
+      .eq('access_level', 'public')
+      .single();
+    
+    if (error) {
+      console.error('Error fetching document:', error);
+      return res.status(500).json({ error: 'Failed to fetch document.', details: error.message });
+    }
+    
+    if (!document) {
+      return res.status(404).json({ error: 'Document not found.' });
+    }
+    
+    res.status(200).json({
+      document: document
+    });
+    
+  } catch (error) {
+    console.error('Error fetching document:', error);
+    res.status(500).json({ error: 'Failed to fetch document.', details: error.message });
+  }
+});
+
 // Fallback text search function
 async function searchDocumentsFallback(req, res, searchTerm, pageNum, limitNum) {
   try {
