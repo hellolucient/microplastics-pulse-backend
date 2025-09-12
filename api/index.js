@@ -1575,17 +1575,22 @@ app.post('/api/admin/rag-documents/upload', upload.single('file'), async (req, r
       // Validate file
       documentProcessor.validateFile(uploadedFile.buffer, uploadedFile.originalname, uploadedFile.mimetype);
       
-      // Upload file to Supabase Storage
-      console.log('Uploading file to Supabase Storage...');
-      const storageResult = await uploadFileToStorage(uploadedFile.buffer, uploadedFile.originalname);
-      console.log(`File uploaded to: ${storageResult.publicUrl}`);
-      
-      // Process document
+      // Process document first (this may convert Word to PDF)
       processedDocument = await documentProcessor.processDocument(
         uploadedFile.buffer, 
         uploadedFile.originalname, 
         uploadedFile.mimetype
       );
+      
+      // Upload file to Supabase Storage (use converted PDF if available)
+      console.log('Uploading file to Supabase Storage...');
+      const fileToUpload = processedDocument.convertedPdfBuffer || uploadedFile.buffer;
+      const fileNameToUpload = processedDocument.convertedPdfBuffer 
+        ? uploadedFile.originalname.replace(/\.(docx?)$/i, '.pdf')
+        : uploadedFile.originalname;
+      
+      const storageResult = await uploadFileToStorage(fileToUpload, fileNameToUpload);
+      console.log(`File uploaded to: ${storageResult.publicUrl}`);
       
       // Override title if provided
       if (title && title.trim()) {
