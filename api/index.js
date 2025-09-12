@@ -6,10 +6,10 @@ const cheerio = require('cheerio');
 const he = require('he');
 const nodemailer = require('nodemailer');
 const cron = require('node-cron');
-const { postSingleTweet } = require('./lib/twitterService');
-const { runScheduledTasks, runEmailCheck } = require('./lib/automation');
+const { postSingleTweet } = require('../lib/twitterService');
+const { runScheduledTasks, runEmailCheck } = require('../lib/automation');
 const multer = require('multer');
-const DocumentProcessor = require('./lib/documentProcessor');
+const DocumentProcessor = require('../lib/documentProcessor');
 const { OpenAI } = require('openai');
 const {
   supabase,
