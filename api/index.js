@@ -1848,6 +1848,33 @@ app.get('/api/rag-documents/public', async (req, res) => {
   }
 });
 
+// Get list of public documents for filtering
+app.get('/api/rag-documents/public/list', async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database client not available.' });
+  
+  try {
+    const { data: documents, error } = await supabase
+      .from('rag_documents')
+      .select('id, title, file_type, created_at')
+      .eq('is_active', true)
+      .eq('access_level', 'public')
+      .order('created_at', { ascending: false });
+    
+    if (error) {
+      console.error('Error fetching document list:', error);
+      return res.status(500).json({ error: 'Failed to fetch document list.', details: error.message });
+    }
+    
+    res.status(200).json({
+      documents: documents || []
+    });
+    
+  } catch (error) {
+    console.error('Error fetching document list:', error);
+    res.status(500).json({ error: 'Failed to fetch document list.', details: error.message });
+  }
+});
+
 // Search public RAG documents using semantic search
 app.get('/api/rag-documents/public/search', async (req, res) => {
   if (!supabase) return res.status(503).json({ error: 'Database client not available.' });
