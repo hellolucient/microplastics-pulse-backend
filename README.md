@@ -224,7 +224,99 @@ To set up and run the project locally, you'll generally need to:
 *   **Enhanced Analytics:** Detailed metrics on automation performance and article engagement
 *   **Multi-language Support:** Expand search queries and AI processing for international sources
 
-## 12. Email Processing System
+## 12. RAG Documents System & Research Library
+
+**Current Implementation:**
+The RAG (Retrieval-Augmented Generation) documents system provides a comprehensive document management and research library functionality for storing, processing, and displaying research documents.
+
+### Database Schema
+
+**Core Tables:**
+- **`rag_documents`**: Main documents table storing document metadata, content, and access controls
+- **`rag_document_chunks`**: Individual text chunks with embeddings for semantic search
+- **`ai_usage_logs`**: Tracks AI API usage for document processing
+
+**Key Features:**
+- **Access Control**: Documents can be set to `public` (visible in Research Library) or `admin` (admin-only)
+- **File Storage**: Documents stored in Supabase Storage with public URLs
+- **Embeddings**: OpenAI text-embedding-3-small for semantic search capabilities
+- **Chunking**: Automatic text chunking for better search performance
+
+### Document Upload Process
+
+**Admin Panel Upload:**
+1. **File Upload**: Supports PDF, DOCX, TXT files via admin interface
+2. **Content Extraction**: Automatic text extraction from uploaded files
+3. **Storage**: Files uploaded to Supabase Storage bucket
+4. **Database Entry**: Document metadata stored in `rag_documents` table
+5. **Chunking**: Content automatically split into searchable chunks
+6. **Embeddings**: OpenAI embeddings generated for semantic search
+7. **Access Level**: Defaults to `public` for Research Library visibility
+
+**Manual Entry:**
+- Direct text input via admin interface
+- No file upload required
+- Same processing pipeline as file uploads
+
+### Research Library Frontend
+
+**Public Access:**
+- **Document Display**: Shows all documents with `access_level: 'public'`
+- **Search Functionality**: Text-based search with highlighting
+- **Document Viewer**: Dedicated page for reading full documents
+- **PDF Support**: Built-in PDF viewer for PDF documents
+- **Metadata Display**: Shows author, date, source information
+
+**Key Endpoints:**
+- `GET /api/rag-documents/public` - Fetch public documents for Research Library
+- `GET /api/rag-documents/public/search` - Search public documents
+- `GET /api/rag-documents/public/:id` - Get specific document details
+- `POST /api/admin/rag-documents/upload` - Upload new documents (admin only)
+
+### Document Processing Pipeline
+
+**File Processing:**
+1. **Validation**: File type and size validation
+2. **Content Extraction**: 
+   - PDF: Uses pdf-parse library
+   - DOCX: Uses mammoth library
+   - TXT: Direct text processing
+3. **Storage Upload**: File uploaded to Supabase Storage
+4. **Database Storage**: Metadata and content stored in PostgreSQL
+5. **Chunking**: Content split into ~500-word chunks
+6. **Embedding Generation**: OpenAI embeddings for each chunk
+7. **Indexing**: Chunks stored in `rag_document_chunks` table
+
+**Error Handling:**
+- File validation errors return clear messages
+- Processing failures logged with details
+- Partial failures don't corrupt existing data
+
+### Access Control System
+
+**Access Levels:**
+- **`public`**: Visible in Research Library, accessible to all users
+- **`admin`**: Admin-only access, not visible in Research Library
+
+**Default Behavior:**
+- New uploads default to `public` access level
+- Admin can change access level via dropdown in upload interface
+- Research Library only displays `public` documents
+
+### Future Enhancements (Planned)
+
+**AI Chat Integration:**
+- RAG-powered chat system using document embeddings
+- Semantic search across document chunks
+- Context-aware responses based on uploaded research
+
+**Advanced Features:**
+- Document categorization and tagging
+- Advanced search filters
+- Document versioning
+- Collaborative editing capabilities
+
+## 13. Email Processing System
 
 **Current Implementation (Railway Deployment):**
 The email processing system now runs reliably on Railway with persistent storage and proper UID tracking:
@@ -288,6 +380,34 @@ The MicroPlastics Pulse backend is now a robust, production-ready system with:
 **Problem**: Getting 404 errors for API endpoints.
 
 **Solution**: Check that your changes are in `api/index.js` and that Railway has redeployed successfully.
+
+### "Documents Not Showing in Research Library"
+
+**Problem**: Uploaded documents don't appear in the Research Library.
+
+**Solution**: Check the document's access level:
+1. ✅ Verify `access_level` is set to `'public'` in database
+2. ✅ Check `is_active` is `true` in database
+3. ✅ Ensure document was uploaded successfully (check `rag_documents` table)
+4. ✅ Refresh the Research Library page
+
+**Quick Fix**: Update access level in database:
+```sql
+UPDATE rag_documents SET access_level = 'public' WHERE title = 'Your Document Title';
+```
+
+### "Document Upload Fails"
+
+**Problem**: File upload returns error or fails to process.
+
+**Solution**: Check common issues:
+1. ✅ File size within limits (check file size validation)
+2. ✅ Supported file type (PDF, DOCX, TXT only)
+3. ✅ Supabase Storage bucket permissions
+4. ✅ OpenAI API key valid and has credits
+5. ✅ Database connection working
+
+**Debug Steps**: Check Railway logs for specific error messages during upload process.
 
 ---
 
