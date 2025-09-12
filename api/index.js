@@ -36,25 +36,6 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
-// Cosine similarity function for semantic search
-function cosineSimilarity(a, b) {
-  if (a.length !== b.length) return 0;
-  
-  let dotProduct = 0;
-  let normA = 0;
-  let normB = 0;
-  
-  for (let i = 0; i < a.length; i++) {
-    dotProduct += a[i] * b[i];
-    normA += a[i] * a[i];
-    normB += b[i] * b[i];
-  }
-  
-  if (normA === 0 || normB === 0) return 0;
-  
-  return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
-}
-
 // Generate embedding for text using OpenAI
 async function generateEmbedding(text) {
   try {
@@ -1848,7 +1829,88 @@ app.get('/api/rag-documents/public', async (req, res) => {
   }
 });
 
-// Search public RAG documents using semantic search
+// Enhanced document search function with snippets and relevance scoring
+function performEnhancedDocumentSearch(documents, searchQuery) {
+  const results = [];
+  
+  documents.forEach(doc => {
+    const content = doc.content.toLowerCase();
+    const title = doc.title.toLowerCase();
+    const searchLower = searchQuery.toLowerCase();
+    
+    // Check for matches in title and content
+    const titleMatch = title.includes(searchLower);
+    const contentMatches = [];
+    
+    // Find all occurrences of the search term in content
+    let startIndex = 0;
+    while (startIndex < content.length) {
+      const matchIndex = content.indexOf(searchLower, startIndex);
+      if (matchIndex === -1) break;
+      
+      // Extract snippet around the match (200 chars before and after)
+      const snippetStart = Math.max(0, matchIndex - 200);
+      const snippetEnd = Math.min(content.length, matchIndex + searchLower.length + 200);
+      const snippet = doc.content.substring(snippetStart, snippetEnd);
+      
+      // Calculate approximate page number (assuming ~500 words per page)
+      const wordsBeforeMatch = doc.content.substring(0, matchIndex).split(/\s+/).length;
+      const approximatePage = Math.ceil(wordsBeforeMatch / 500);
+      
+      contentMatches.push({
+        snippet: snippet,
+        page: approximatePage,
+        position: matchIndex
+      });
+      
+      startIndex = matchIndex + 1;
+    }
+    
+    // Only include documents that have matches
+    if (titleMatch || contentMatches.length > 0) {
+      // Calculate relevance score
+      let relevanceScore = 0;
+      
+      // Title matches get higher score
+      if (titleMatch) {
+        relevanceScore += 100;
+        // Bonus for exact title match
+        if (title === searchLower) {
+          relevanceScore += 50;
+        }
+      }
+      
+      // Content matches get score based on frequency
+      relevanceScore += contentMatches.length * 10;
+      
+      // Bonus for early occurrence in document
+      if (contentMatches.length > 0) {
+        const firstMatch = contentMatches[0];
+        const documentLength = doc.content.length;
+        const positionRatio = firstMatch.position / documentLength;
+        relevanceScore += Math.round((1 - positionRatio) * 20); // Earlier = higher score
+      }
+      
+      results.push({
+        id: doc.id,
+        title: doc.title,
+        file_type: doc.file_type,
+        file_size: doc.file_size,
+        metadata: doc.metadata,
+        created_at: doc.created_at,
+        relevanceScore: relevanceScore,
+        titleMatch: titleMatch,
+        contentMatches: contentMatches.slice(0, 3), // Limit to top 3 matches
+        totalMatches: contentMatches.length
+      });
+    }
+  });
+  
+  // Sort by relevance score (highest first)
+  return results.sort((a, b) => b.relevanceScore - a.relevanceScore);
+}
+
+// Search public RAG documents with enhanced results
 app.get('/api/rag-documents/public/search', async (req, res) => {
   if (!supabase) return res.status(503).json({ error: 'Database client not available.' });
   
@@ -1859,32 +1921,24 @@ app.get('/api/rag-documents/public/search', async (req, res) => {
       return res.status(400).json({ error: 'Search term is required.' });
     }
     
+    const searchQuery = searchTerm.toLowerCase().trim();
     const pageNum = parseInt(page);
     const limitNum = parseInt(limit);
     
-    // Generate embedding for the search query
-    const queryEmbedding = await generateEmbedding(searchTerm);
-    
-    if (!queryEmbedding) {
-      // Fallback to text search if embedding fails
-      return await searchDocumentsFallback(req, res, searchTerm, pageNum, limitNum);
-    }
-    
-    // Get all public documents with embeddings
-    const { data: documents, error: documentsError } = await supabase
+    // Get all public documents with content for searching
+    const { data: allDocuments, error: fetchError } = await supabase
       .from('rag_documents')
-      .select('id, title, content, file_type, file_size, metadata, created_at, embedding')
+      .select('id, title, content, file_type, file_size, metadata, created_at')
       .eq('is_active', true)
       .eq('access_level', 'public')
-      .not('embedding', 'is', null)
       .not('content', 'is', null);
     
-    if (documentsError) {
-      console.error('Error fetching documents with embeddings:', documentsError);
-      return await searchDocumentsFallback(req, res, searchTerm, pageNum, limitNum);
+    if (fetchError) {
+      console.error('Error fetching documents:', fetchError);
+      return res.status(500).json({ error: 'Failed to fetch documents.', details: fetchError.message });
     }
     
-    if (!documents || documents.length === 0) {
+    if (!allDocuments || allDocuments.length === 0) {
       return res.status(200).json({
         documents: [],
         pagination: {
@@ -1894,34 +1948,23 @@ app.get('/api/rag-documents/public/search', async (req, res) => {
           totalPages: 0,
           hasNext: false,
           hasPrev: false
-        }
+        },
+        searchTerm: searchQuery
       });
     }
     
-    // Calculate similarity scores
-    const documentsWithSimilarity = documents.map(doc => {
-      const similarity = cosineSimilarity(queryEmbedding, doc.embedding);
-      return {
-        ...doc,
-        similarity
-      };
-    });
-    
-    // Sort by similarity and filter by threshold
-    const relevantDocuments = documentsWithSimilarity
-      .sort((a, b) => b.similarity - a.similarity)
-      .filter(doc => doc.similarity > 0.3) // Lower threshold to catch more matches
-      .map(({ similarity, embedding, ...doc }) => doc); // Remove similarity and embedding from response
+    // Perform enhanced search with snippets
+    const searchResults = performEnhancedDocumentSearch(allDocuments, searchQuery);
     
     // Apply pagination
     const offset = (pageNum - 1) * limitNum;
-    const paginatedResults = relevantDocuments.slice(offset, offset + limitNum);
+    const paginatedResults = searchResults.slice(offset, offset + limitNum);
     
-    const totalPages = Math.ceil(relevantDocuments.length / limitNum);
+    const totalPages = Math.ceil(searchResults.length / limitNum);
     const pagination = {
       page: pageNum,
       limit: limitNum,
-      total: relevantDocuments.length,
+      total: searchResults.length,
       totalPages,
       hasNext: pageNum < totalPages,
       hasPrev: pageNum > 1
@@ -1930,58 +1973,14 @@ app.get('/api/rag-documents/public/search', async (req, res) => {
     res.status(200).json({
       documents: paginatedResults,
       pagination,
-      searchTerm: searchTerm.toLowerCase().trim()
-    });
-    
-  } catch (error) {
-    console.error('Error in semantic document search:', error);
-    return await searchDocumentsFallback(req, res, searchTerm, pageNum, limitNum);
-  }
-});
-
-// Fallback text search function
-async function searchDocumentsFallback(req, res, searchTerm, pageNum, limitNum) {
-  try {
-    const searchQuery = searchTerm.toLowerCase().trim();
-    const offset = (pageNum - 1) * limitNum;
-    
-    // Search across title and content fields
-    const { data, error, count } = await supabase
-      .from('rag_documents')
-      .select('id, title, content, file_type, file_size, metadata, created_at', { count: 'exact' })
-      .eq('is_active', true)
-      .eq('access_level', 'public')
-      .or(`title.ilike.%${searchQuery}%,content.ilike.%${searchQuery}%`)
-      .order('created_at', { ascending: false })
-      .range(offset, offset + limitNum - 1);
-    
-    if (error) {
-      console.error('Error in fallback search:', error);
-      return res.status(500).json({ error: 'Failed to search documents.', details: error.message });
-    }
-    
-    const totalCount = count || 0;
-    const totalPages = Math.ceil(totalCount / limitNum);
-    const pagination = {
-      page: pageNum,
-      limit: limitNum,
-      total: totalCount,
-      totalPages,
-      hasNext: pageNum < totalPages,
-      hasPrev: pageNum > 1
-    };
-    
-    res.status(200).json({
-      documents: data || [],
-      pagination,
       searchTerm: searchQuery
     });
     
   } catch (error) {
-    console.error('Error in fallback document search:', error);
-    res.status(500).json({ error: 'Failed to search documents.' });
+    console.error('Error searching RAG documents:', error);
+    res.status(500).json({ error: 'Failed to search documents.', details: error.message });
   }
-}
+});
 
 // Delete RAG document (admin only)
 app.delete('/api/admin/rag-documents/:id', async (req, res) => {
