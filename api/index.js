@@ -1844,6 +1844,9 @@ function performEnhancedDocumentSearch(documents, searchQuery) {
     
     // Find all occurrences of the search term in content
     let startIndex = 0;
+    const snippetWindow = 400; // Total window size (200 before + 200 after)
+    const minGap = 100; // Minimum gap between snippets to avoid overlap
+    
     while (startIndex < content.length) {
       const matchIndex = content.indexOf(searchLower, startIndex);
       if (matchIndex === -1) break;
@@ -1857,13 +1860,20 @@ function performEnhancedDocumentSearch(documents, searchQuery) {
       const wordsBeforeMatch = doc.content.substring(0, matchIndex).split(/\s+/).length;
       const approximatePage = Math.ceil(wordsBeforeMatch / 500);
       
-      contentMatches.push({
-        snippet: snippet,
-        page: approximatePage,
-        position: matchIndex
-      });
+      // Check if this snippet overlaps significantly with the last one
+      const shouldAddSnippet = contentMatches.length === 0 || 
+        (matchIndex - contentMatches[contentMatches.length - 1].position) > minGap;
       
-      startIndex = matchIndex + 1;
+      if (shouldAddSnippet) {
+        contentMatches.push({
+          snippet: snippet,
+          page: approximatePage,
+          position: matchIndex
+        });
+      }
+      
+      // Skip ahead to avoid overlapping snippets
+      startIndex = matchIndex + snippetWindow;
     }
     
     // Only include documents that have matches
