@@ -593,6 +593,17 @@ async function getRelevantArticles(query) {
       console.error('Error fetching documents with embeddings:', documentsError);
     }
 
+    // Get all document chunks with embeddings for more granular search
+    const { data: chunks, error: chunksError } = await supabase
+      .from('rag_document_chunks')
+      .select('id, document_id, chunk_index, chunk_text, embedding')
+      .not('embedding', 'is', null)
+      .not('chunk_text', 'is', null);
+
+    if (chunksError) {
+      console.error('Error fetching document chunks with embeddings:', chunksError);
+    }
+
     // Combine articles and documents
     const allContent = [];
     
@@ -623,6 +634,26 @@ async function getRelevantArticles(query) {
       });
     }
 
+    // Add document chunks for more granular search
+    if (chunks && chunks.length > 0) {
+      chunks.forEach(chunk => {
+        // Find the parent document for metadata
+        const parentDoc = documents?.find(doc => doc.id === chunk.document_id);
+        allContent.push({
+          id: chunk.id,
+          title: parentDoc ? `${parentDoc.title} (Chunk ${chunk.chunk_index})` : `Document Chunk ${chunk.chunk_index}`,
+          type: 'document_chunk',
+          content: chunk.chunk_text,
+          source: parentDoc ? (parentDoc.file_url || 'Uploaded Document') : 'Document Chunk',
+          date: parentDoc ? parentDoc.created_at : new Date().toISOString(),
+          ai_summary: chunk.chunk_text.substring(0, 200) + '...',
+          embedding: chunk.embedding,
+          document_id: chunk.document_id,
+          chunk_index: chunk.chunk_index
+        });
+      });
+    }
+
     if (allContent.length === 0) {
       return await getRelevantArticlesFallback(query);
     }
@@ -640,7 +671,7 @@ async function getRelevantArticles(query) {
     const relevantContent = contentWithSimilarity
       .sort((a, b) => b.similarity - a.similarity)
       .slice(0, 7)
-      .filter(item => item.similarity > 0.7) // Only include content with good similarity
+      .filter(item => item.similarity > 0.3) // Lower threshold to catch more relevant content
       .map(({ similarity, embedding, ...item }) => item); // Remove similarity and embedding from response
 
     // If we have good semantic matches, return them
