@@ -1949,7 +1949,10 @@ function performEnhancedDocumentSearch(documents, searchQuery) {
         contentMatches.push({
           snippet: snippet,
           page: actualPage,
-          position: matchIndex
+          position: matchIndex,
+          searchTerm: searchLower,
+          snippetStart: snippetStart,
+          snippetEnd: snippetEnd
         });
       }
       
