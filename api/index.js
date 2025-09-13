@@ -1894,9 +1894,12 @@ function performEnhancedDocumentSearch(documents, searchQuery) {
     const snippetSize = 200; // Characters before and after match
     const minGap = 100; // Minimum gap between snippets to avoid overlap
     
-    while (startIndex < content.length) {
-      const matchIndex = content.indexOf(searchLower, startIndex);
-      if (matchIndex === -1) break;
+    // Use word boundary regex for whole word matching
+    const wordBoundaryRegex = new RegExp(`\\b${searchLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'gi');
+    let match;
+    
+    while ((match = wordBoundaryRegex.exec(content)) !== null) {
+      const matchIndex = match.index;
       
       // Extract snippet around the match (200 chars before and after)
       const snippetStart = Math.max(0, matchIndex - snippetSize);
@@ -1956,8 +1959,8 @@ function performEnhancedDocumentSearch(documents, searchQuery) {
         });
       }
       
-      // Move start index to avoid immediate overlap
-      startIndex = matchIndex + searchLower.length + minGap;
+      // Move regex lastIndex to avoid immediate overlap
+      wordBoundaryRegex.lastIndex = matchIndex + searchLower.length + minGap;
     }
     
     // Only include documents that have matches
