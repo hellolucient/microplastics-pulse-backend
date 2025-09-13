@@ -1961,7 +1961,7 @@ app.get('/api/rag-documents/public/search', async (req, res) => {
   if (!supabase) return res.status(503).json({ error: 'Database client not available.' });
   
   try {
-    const { q: searchTerm, page = 1, limit = 20 } = req.query;
+    const { q: searchTerm, page = 1, limit = 20, documentIds } = req.query;
     
     if (!searchTerm || searchTerm.trim().length === 0) {
       return res.status(400).json({ error: 'Search term is required.' });
@@ -1971,13 +1971,27 @@ app.get('/api/rag-documents/public/search', async (req, res) => {
     const pageNum = parseInt(page);
     const limitNum = parseInt(limit);
     
-    // Get all public documents with content for searching
-    const { data: allDocuments, error: fetchError } = await supabase
+    // Parse document IDs if provided
+    let selectedDocumentIds = [];
+    if (documentIds && documentIds.trim()) {
+      selectedDocumentIds = documentIds.split(',').map(id => id.trim()).filter(id => id);
+    }
+    
+    // Build query for documents
+    let query = supabase
       .from('rag_documents')
       .select('id, title, content, file_type, file_size, metadata, created_at')
       .eq('is_active', true)
       .eq('access_level', 'public')
       .not('content', 'is', null);
+    
+    // Filter by selected document IDs if provided
+    if (selectedDocumentIds.length > 0) {
+      query = query.in('id', selectedDocumentIds);
+    }
+    
+    // Get filtered documents with content for searching
+    const { data: allDocuments, error: fetchError } = await query;
     
     if (fetchError) {
       console.error('Error fetching documents:', fetchError);
