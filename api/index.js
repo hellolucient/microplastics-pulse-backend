@@ -1610,7 +1610,8 @@ app.post('/api/admin/rag-documents/upload', upload.single('file'), async (req, r
         ...processedDocument.metadata,
         ...JSON.parse(metadata || '{}'),
         uploadedFilename: uploadedFile.originalname,
-        uploadedMimeType: uploadedFile.mimetype
+        uploadedMimeType: uploadedFile.mimetype,
+        pages: processedDocument.pages // Store page information for accurate page mapping
       };
       
     } else {
@@ -1902,9 +1903,29 @@ function performEnhancedDocumentSearch(documents, searchQuery) {
       const snippetEnd = Math.min(content.length, matchIndex + searchLower.length + snippetSize);
       const snippet = doc.content.substring(snippetStart, snippetEnd);
       
-      // Calculate approximate page number (assuming ~500 words per page)
-      const wordsBeforeMatch = doc.content.substring(0, matchIndex).split(/\s+/).length;
-      const approximatePage = Math.ceil(wordsBeforeMatch / 500);
+      // Calculate actual page number if page information is available
+      let actualPage = 1;
+      
+      if (doc.metadata && doc.metadata.pages && Array.isArray(doc.metadata.pages)) {
+        // Use actual page information from PDF parsing
+        let charCount = 0;
+        for (let pageIndex = 0; pageIndex < doc.metadata.pages.length; pageIndex++) {
+          const pageText = doc.metadata.pages[pageIndex];
+          const pageEndChar = charCount + pageText.length;
+          
+          if (matchIndex >= charCount && matchIndex < pageEndChar) {
+            actualPage = pageIndex + 1; // Pages are 1-indexed
+            break;
+          }
+          charCount = pageEndChar;
+        }
+      } else {
+        // Fallback to character-based estimation
+        const charsBeforeMatch = matchIndex;
+        const totalChars = doc.content.length;
+        const charsPerPage = Math.max(2000, Math.floor(totalChars / 10));
+        actualPage = Math.max(1, Math.ceil(charsBeforeMatch / charsPerPage));
+      }
       
       // Check if this snippet overlaps significantly with the previous one
       let shouldAddSnippet = true;
@@ -1926,7 +1947,7 @@ function performEnhancedDocumentSearch(documents, searchQuery) {
       if (shouldAddSnippet) {
         contentMatches.push({
           snippet: snippet,
-          page: approximatePage,
+          page: actualPage,
           position: matchIndex
         });
       }
