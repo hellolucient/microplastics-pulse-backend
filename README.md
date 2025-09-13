@@ -41,6 +41,13 @@ The project operates through a combination of automated fetching, AI processing,
     *   **Batch AI Updates for Missing Images:** Process stories in the database that are missing an AI-generated image. This function will generate both a new summary and a new image for these articles.
     *   **Regenerate Image by ID:** Allows an administrator to regenerate the AI image for a specific article using its UUID, without affecting its summary.
 *   **Public News Feed:** Displays the curated and AI-enhanced articles to users.
+*   **Research Library:** Advanced document search and viewing system with:
+    *   **PDF Document Upload:** Upload and store research documents (PDFs) with automatic text extraction
+    *   **Semantic Search:** Search through document content with AI-powered relevance scoring
+    *   **Document Filtering:** Filter search results by specific documents
+    *   **Whole Word Matching:** Intelligent search that matches complete words only (e.g., "national" won't match "international")
+    *   **Page-Aware Processing:** Accurate page number calculation using actual PDF page data
+    *   **Snippet Extraction:** Generate relevant text snippets with highlighted search terms
 *   **Secure Image Storage:** Utilizes Vercel Blob for reliable image hosting.
 *   **Robust Database:** Employs Supabase (PostgreSQL) for structured data storage.
 
@@ -134,6 +141,12 @@ The backend exposes several key API endpoints under the `/api` path:
 *   `POST /batch-update-stories`: Processes a batch of stories from the database for missing AI images
 *   `POST /regenerate-image`: Regenerates the AI image for a specific article by UUID
 *   `GET /search-queries`: Returns the predefined list of search queries used for fetching articles
+*   **Research Library Endpoints:**
+    *   `GET /api/rag-documents/public`: Fetches list of public research documents
+    *   `GET /api/rag-documents/public/search`: Advanced search through document content with filtering
+    *   `GET /api/rag-documents/public/{id}`: Retrieves specific document for viewing
+    *   `POST /api/admin/rag-documents/upload`: Upload new PDF documents (admin only)
+    *   `GET /api/rag-documents/public/list`: Get document list for filtering options
 
 ## 7. Setup & Running Locally (Brief Guide)
 
