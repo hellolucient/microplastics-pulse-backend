@@ -1909,6 +1909,7 @@ function performEnhancedDocumentSearch(documents, searchQuery) {
       if (doc.metadata && doc.metadata.pages && Array.isArray(doc.metadata.pages)) {
         // Use actual page information from PDF parsing
         // Pages are now cleaned to match the main content
+        console.log(`Document ${doc.id}: Found ${doc.metadata.pages.length} pages in metadata`);
         let charCount = 0;
         for (let pageIndex = 0; pageIndex < doc.metadata.pages.length; pageIndex++) {
           const pageText = doc.metadata.pages[pageIndex];
@@ -1916,16 +1917,19 @@ function performEnhancedDocumentSearch(documents, searchQuery) {
           
           if (matchIndex >= charCount && matchIndex < pageEndChar) {
             actualPage = pageIndex + 1; // Pages are 1-indexed
+            console.log(`Match at position ${matchIndex} found on page ${actualPage} (charCount: ${charCount}, pageEndChar: ${pageEndChar})`);
             break;
           }
           charCount = pageEndChar;
         }
       } else {
         // Fallback to character-based estimation
+        console.log(`Document ${doc.id}: No page information available, using character-based estimation`);
         const charsBeforeMatch = matchIndex;
         const totalChars = doc.content.length;
         const charsPerPage = Math.max(2000, Math.floor(totalChars / 10));
         actualPage = Math.max(1, Math.ceil(charsBeforeMatch / charsPerPage));
+        console.log(`Estimated page ${actualPage} for match at position ${matchIndex}`);
       }
       
       // Check if this snippet overlaps significantly with the previous one
