@@ -1890,26 +1890,49 @@ function performEnhancedDocumentSearch(documents, searchQuery) {
     
     // Find all occurrences of the search term in content
     let startIndex = 0;
+    const snippetSize = 200; // Characters before and after match
+    const minGap = 100; // Minimum gap between snippets to avoid overlap
+    
     while (startIndex < content.length) {
       const matchIndex = content.indexOf(searchLower, startIndex);
       if (matchIndex === -1) break;
       
       // Extract snippet around the match (200 chars before and after)
-      const snippetStart = Math.max(0, matchIndex - 200);
-      const snippetEnd = Math.min(content.length, matchIndex + searchLower.length + 200);
+      const snippetStart = Math.max(0, matchIndex - snippetSize);
+      const snippetEnd = Math.min(content.length, matchIndex + searchLower.length + snippetSize);
       const snippet = doc.content.substring(snippetStart, snippetEnd);
       
       // Calculate approximate page number (assuming ~500 words per page)
       const wordsBeforeMatch = doc.content.substring(0, matchIndex).split(/\s+/).length;
       const approximatePage = Math.ceil(wordsBeforeMatch / 500);
       
-      contentMatches.push({
-        snippet: snippet,
-        page: approximatePage,
-        position: matchIndex
-      });
+      // Check if this snippet overlaps significantly with the previous one
+      let shouldAddSnippet = true;
+      if (contentMatches.length > 0) {
+        const lastMatch = contentMatches[contentMatches.length - 1];
+        const lastSnippetEnd = lastMatch.position + searchLower.length + snippetSize;
+        const currentSnippetStart = matchIndex - snippetSize;
+        
+        // If snippets overlap by more than 50%, skip this one
+        const overlap = Math.max(0, lastSnippetEnd - currentSnippetStart);
+        const snippetLength = snippetSize * 2 + searchLower.length;
+        const overlapRatio = overlap / snippetLength;
+        
+        if (overlapRatio > 0.5) {
+          shouldAddSnippet = false;
+        }
+      }
       
-      startIndex = matchIndex + 1;
+      if (shouldAddSnippet) {
+        contentMatches.push({
+          snippet: snippet,
+          page: approximatePage,
+          position: matchIndex
+        });
+      }
+      
+      // Move start index to avoid immediate overlap
+      startIndex = matchIndex + searchLower.length + minGap;
     }
     
     // Only include documents that have matches
