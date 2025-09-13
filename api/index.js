@@ -1908,6 +1908,7 @@ function performEnhancedDocumentSearch(documents, searchQuery) {
       
       if (doc.metadata && doc.metadata.pages && Array.isArray(doc.metadata.pages)) {
         // Use actual page information from PDF parsing
+        // Pages are now cleaned to match the main content
         let charCount = 0;
         for (let pageIndex = 0; pageIndex < doc.metadata.pages.length; pageIndex++) {
           const pageText = doc.metadata.pages[pageIndex];
