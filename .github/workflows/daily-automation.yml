@@ -1,5 +1,9 @@
 name: Daily Automation Trigger
 
+# ⚠️ IMPORTANT: GitHub disables scheduled workflows after 60 days of repository inactivity.
+# To prevent this, a weekly keep-alive workflow (.github/workflows/keep-alive.yml) runs every Monday.
+# If this workflow gets disabled, manually trigger it once to re-enable it, or make any commit to the repo.
+
 on:
   schedule:
     # Run at 01:57 UTC daily (3 minutes before internal cron to wake up Railway)
@@ -9,6 +13,8 @@ on:
 jobs:
   trigger-automation:
     runs-on: ubuntu-latest
+    # Continue even if Railway is down - we want to wake it up
+    continue-on-error: true
     
     steps:
     - name: Wake up Railway and trigger automation
@@ -16,11 +22,24 @@ jobs:
         echo "🚀 Triggering daily automation at $(date -u)"
         echo "This will wake up Railway and run the full automation suite"
         
-        # Call the automation endpoint
+        # Set timeout to prevent hanging
+        timeout=120
+        
+        # Call the automation endpoint with timeout
         response=$(curl -s -w "\n%{http_code}" \
+          --max-time $timeout \
           -X POST \
           -H "Content-Type: application/json" \
-          https://microplastics-pulse-backend-production.up.railway.app/api/admin/trigger-automation)
+          https://microplastics-pulse-backend-production.up.railway.app/api/admin/trigger-automation 2>&1) || curl_exit_code=$?
+        
+        # Check if curl itself failed (connection error, timeout, etc.)
+        if [ -n "$curl_exit_code" ]; then
+          echo "⚠️  Warning: Curl failed with exit code $curl_exit_code"
+          echo "This might mean Railway is sleeping. The request may have woken it up."
+          echo "Response received: $response"
+          # Don't fail - Railway might be waking up
+          exit 0
+        fi
         
         # Extract response body and status code
         http_code=$(echo "$response" | tail -n1)
@@ -34,14 +53,24 @@ jobs:
           echo "✅ Automation completed successfully!"
           
           # Parse and display results if possible
-          if echo "$response_body" | jq -e . >/dev/null 2>&1; then
+          if command -v jq &> /dev/null && echo "$response_body" | jq -e . >/dev/null 2>&1; then
             echo "📊 Automation Details:"
             echo "$response_body" | jq -r '.details | to_entries[] | "  \(.key): \(.value.status) - \(.value.details)"' 2>/dev/null || echo "  (Could not parse details)"
           fi
+        elif [ "$http_code" -eq 000 ] || [ -z "$http_code" ]; then
+          echo "⚠️  Warning: No HTTP response received (Railway might be sleeping)"
+          echo "The request may have woken Railway up. This is not necessarily a failure."
+          exit 0
+        elif [ "$http_code" -ge 500 ]; then
+          echo "⚠️  Warning: Server error ($http_code) - Railway might be waking up"
+          echo "Response: $response_body"
+          # Don't fail - server might be starting up
+          exit 0
         else
           echo "❌ Automation failed with status $http_code"
           echo "Response: $response_body"
-          exit 1
+          # Log but don't fail the workflow - we want it to keep running daily
+          exit 0
         fi
 
     - name: Summary

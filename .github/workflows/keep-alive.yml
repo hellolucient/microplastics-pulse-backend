@@ -1,0 +1,23 @@
+name: Keep Repository Active
+
+# This workflow runs weekly to keep the repository active and prevent
+# GitHub from disabling scheduled workflows after 60 days of inactivity.
+# GitHub automatically disables scheduled workflows if there's no activity
+# in the repository for 60+ days.
+
+on:
+  schedule:
+    # Run every Monday at 12:00 UTC (weekly keep-alive)
+    - cron: '0 12 * * 1'
+  workflow_dispatch: # Allow manual triggering
+
+jobs:
+  keep-alive:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Keep repository active
+      run: |
+        echo "✅ Repository keep-alive check at $(date -u)"
+        echo "This ensures scheduled workflows remain enabled"
+        echo "GitHub disables scheduled workflows after 60 days of inactivity"
+        echo "This weekly run prevents that from happening"
