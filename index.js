@@ -1,4 +1,4 @@
-require('dotenv').config({ path: require('path').resolve(__dirname, '../.env') }); 
+require('dotenv').config({ path: require('path').resolve(__dirname, './.env') }); 
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
@@ -21,20 +21,35 @@ const {
   fetchArticlesFromGoogle,
   summarizeText,
   generateAndStoreImage
-} = require('../lib/coreLogic');
+} = require('./lib/coreLogic');
 
 // Add chat routes
-const chatRoutes = require('./admin/chat');
+const chatRoutes = require('./api/admin/chat');
 
 const app = express();
 
 // Initialize document processor
 const documentProcessor = new DocumentProcessor();
 
-// Initialize OpenAI client
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+// Lazy initialization for OpenAI client
+let openai = null;
+
+function getOpenAIClient() {
+  if (!process.env.OPENAI_API_KEY) {
+    return null;
+  }
+  if (!openai) {
+    try {
+      openai = new OpenAI({
+        apiKey: process.env.OPENAI_API_KEY,
+      });
+    } catch (error) {
+      console.warn('[Index] Failed to initialize OpenAI client:', error.message);
+      return null;
+    }
+  }
+  return openai;
+}
 
 // Cosine similarity function for semantic search
 function cosineSimilarity(a, b) {
@@ -75,7 +90,13 @@ async function generateEmbedding(text) {
       console.log(`Text truncated from ${text.length} to ${textToEmbed.length} characters (${estimatedTokens} → ~${maxTokens} tokens)`);
     }
 
-    const response = await openai.embeddings.create({
+    const openaiClient = getOpenAIClient();
+    if (!openaiClient) {
+      console.warn('[Index] OpenAI API key not configured, cannot generate embedding');
+      return null;
+    }
+    
+    const response = await openaiClient.embeddings.create({
       model: "text-embedding-3-small",
       input: textToEmbed,
     });
@@ -169,7 +190,7 @@ app.post('/api/add-news', async (req, res) => {
 
     try {
         // Use the enhanced URL resolver first
-        const { resolveGoogleShareUrl } = require('../lib/coreLogic');
+        const { resolveGoogleShareUrl } = require('./lib/coreLogic');
         const resolvedUrl = await resolveGoogleShareUrl(url);
         
         console.log(`[Manual Submission] URL resolution: ${url} -> ${resolvedUrl}`);
@@ -1553,7 +1574,7 @@ app.get('/api/admin/ai-usage-recent', async (req, res) => {
 // Test endpoint for AI logging
 app.post('/api/admin/test-ai-logging', async (req, res) => {
   try {
-    const { logTextGenerationUsage } = require('../lib/aiUsageLogger');
+    const { logTextGenerationUsage } = require('./lib/aiUsageLogger');
     
     // Test logging with dummy data
     await logTextGenerationUsage(

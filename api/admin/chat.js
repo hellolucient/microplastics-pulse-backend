@@ -6,20 +6,62 @@ const { logTextGenerationUsage } = require('../../lib/aiUsageLogger');
 
 const router = express.Router();
 
-// Initialize AI clients
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+// Lazy initialization for AI clients
+let openai = null;
+let anthropic = null;
+let supabase = null;
 
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
-});
+function getOpenAIClient() {
+  if (!process.env.OPENAI_API_KEY) {
+    return null;
+  }
+  if (!openai) {
+    try {
+      openai = new OpenAI({
+        apiKey: process.env.OPENAI_API_KEY,
+      });
+    } catch (error) {
+      console.warn('[Chat] Failed to initialize OpenAI client:', error.message);
+      return null;
+    }
+  }
+  return openai;
+}
 
-// Initialize Supabase client
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY
-);
+function getAnthropicClient() {
+  if (!process.env.ANTHROPIC_API_KEY) {
+    return null;
+  }
+  if (!anthropic) {
+    try {
+      anthropic = new Anthropic({
+        apiKey: process.env.ANTHROPIC_API_KEY,
+      });
+    } catch (error) {
+      console.warn('[Chat] Failed to initialize Anthropic client:', error.message);
+      return null;
+    }
+  }
+  return anthropic;
+}
+
+function getSupabaseClient() {
+  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_KEY) {
+    return null;
+  }
+  if (!supabase) {
+    try {
+      supabase = createClient(
+        process.env.SUPABASE_URL,
+        process.env.SUPABASE_SERVICE_KEY
+      );
+    } catch (error) {
+      console.warn('[Chat] Failed to initialize Supabase client:', error.message);
+      return null;
+    }
+  }
+  return supabase;
+}
 
 // Chat endpoint
 router.post('/', async (req, res) => {
@@ -72,7 +114,14 @@ router.post('/generate-embeddings', async (req, res) => {
     // PHASE 1: Process articles without embeddings
     res.write(`data: ${JSON.stringify({ type: 'phase', message: 'Processing articles...' })}\n\n`);
     
-    const { data: articles, error: articlesError } = await supabase
+    const supabaseClient = getSupabaseClient();
+    if (!supabaseClient) {
+      res.write(`data: ${JSON.stringify({ type: 'error', error: 'Supabase not configured' })}\n\n`);
+      res.end();
+      return;
+    }
+    
+    const { data: articles, error: articlesError } = await supabaseClient
       .from('latest_news')
       .select('id, title, ai_summary')
       .is('embedding', null)
@@ -105,7 +154,7 @@ router.post('/generate-embeddings', async (req, res) => {
             const embedding = await generateEmbedding(textToEmbed);
             
             if (embedding) {
-              const { error: updateError } = await supabase
+              const { error: updateError } = await supabaseClient
                 .from('latest_news')
                 .update({ embedding: embedding })
                 .eq('id', article.id);
@@ -138,7 +187,7 @@ router.post('/generate-embeddings', async (req, res) => {
     // PHASE 2: Process RAG documents without embeddings
     res.write(`data: ${JSON.stringify({ type: 'phase', message: 'Processing RAG documents...' })}\n\n`);
     
-    const { data: documents, error: documentsError } = await supabase
+    const { data: documents, error: documentsError } = await supabaseClient
       .from('rag_documents')
       .select('id, title, content')
       .is('embedding', null)
@@ -172,7 +221,7 @@ router.post('/generate-embeddings', async (req, res) => {
             const embedding = await generateEmbedding(textToEmbed);
             
             if (embedding) {
-              const { error: updateError } = await supabase
+              const { error: updateError } = await supabaseClient
                 .from('rag_documents')
                 .update({ embedding: embedding })
                 .eq('id', document.id);
@@ -203,7 +252,7 @@ router.post('/generate-embeddings', async (req, res) => {
     // PHASE 3: Process RAG document chunks without embeddings
     res.write(`data: ${JSON.stringify({ type: 'phase', message: 'Processing document chunks...' })}\n\n`);
     
-    const { data: chunks, error: chunksError } = await supabase
+    const { data: chunks, error: chunksError } = await supabaseClient
       .from('rag_document_chunks')
       .select('id, document_id, chunk_index, chunk_text')
       .is('embedding', null)
@@ -235,7 +284,7 @@ router.post('/generate-embeddings', async (req, res) => {
             const embedding = await generateEmbedding(chunk.chunk_text);
             
             if (embedding) {
-              const { error: updateError } = await supabase
+              const { error: updateError } = await supabaseClient
                 .from('rag_document_chunks')
                 .update({ embedding: embedding })
                 .eq('id', chunk.id);
@@ -300,8 +349,13 @@ async function generateGeneralResponse(message, model, provider, conversationHis
       { role: 'user', content: message }
     ];
 
+    const openaiClient = getOpenAIClient();
+    if (!openaiClient) {
+      return res.status(500).json({ error: 'OpenAI API key not configured' });
+    }
+
     try {
-      const completion = await openai.chat.completions.create({
+      const completion = await openaiClient.chat.completions.create({
         model: model,
         messages: messages,
         max_tokens: 1000,
@@ -347,8 +401,13 @@ async function generateGeneralResponse(message, model, provider, conversationHis
       content: msg.content
     }));
 
+    const anthropicClient = getAnthropicClient();
+    if (!anthropicClient) {
+      return res.status(500).json({ error: 'Anthropic API key not configured' });
+    }
+
     try {
-      const response = await anthropic.messages.create({
+      const response = await anthropicClient.messages.create({
         model: model,
         max_tokens: 1000,
         system: systemPrompt,
@@ -425,8 +484,13 @@ Please provide a comprehensive answer based on the research, and cite specific s
       { role: 'user', content: message }
     ];
 
+    const openaiClient = getOpenAIClient();
+    if (!openaiClient) {
+      return res.status(500).json({ error: 'OpenAI API key not configured' });
+    }
+
     try {
-      const completion = await openai.chat.completions.create({
+      const completion = await openaiClient.chat.completions.create({
         model: model,
         messages: messages,
         max_tokens: 1500,
@@ -472,8 +536,13 @@ Please provide a comprehensive answer based on the research, and cite specific s
       content: msg.content
     }));
 
+    const anthropicClient = getAnthropicClient();
+    if (!anthropicClient) {
+      return res.status(500).json({ error: 'Anthropic API key not configured' });
+    }
+
     try {
-      const response = await anthropic.messages.create({
+      const response = await anthropicClient.messages.create({
         model: model,
         max_tokens: 1500,
         system: systemPrompt,
@@ -527,7 +596,13 @@ async function generateEmbedding(text) {
       return null;
     }
 
-    const response = await openai.embeddings.create({
+    const openaiClient = getOpenAIClient();
+    if (!openaiClient) {
+      console.warn('[Chat] OpenAI API key not configured, cannot generate embedding');
+      return null;
+    }
+
+    const response = await openaiClient.embeddings.create({
       model: "text-embedding-3-small",
       input: text,
     });
@@ -571,7 +646,12 @@ async function getRelevantArticles(query) {
     }
 
     // Get all articles with embeddings
-    const { data: articles, error: articlesError } = await supabase
+    const supabaseClient = getSupabaseClient();
+    if (!supabaseClient) {
+      return res.status(500).json({ error: 'Supabase not configured' });
+    }
+    
+    const { data: articles, error: articlesError } = await supabaseClient
       .from('latest_news')
       .select('id, title, ai_summary, url, published_date, embedding')
       .not('embedding', 'is', null)
@@ -582,7 +662,7 @@ async function getRelevantArticles(query) {
     }
 
     // Get all documents with embeddings (admin access only for AI Chat)
-    const { data: documents, error: documentsError } = await supabase
+    const { data: documents, error: documentsError } = await supabaseClient
       .from('rag_documents')
       .select('id, title, content, file_type, metadata, created_at, embedding')
       .not('embedding', 'is', null)
@@ -594,7 +674,7 @@ async function getRelevantArticles(query) {
     }
 
     // Get all document chunks with embeddings for more granular search
-    const { data: chunks, error: chunksError } = await supabase
+    const { data: chunks, error: chunksError } = await supabaseClient
       .from('rag_document_chunks')
       .select('id, document_id, chunk_index, chunk_text, embedding')
       .not('embedding', 'is', null)
@@ -695,7 +775,12 @@ async function getRelevantArticlesFallback(query) {
     
     if (searchTerms.length === 0) {
       // If no meaningful search terms, return recent articles
-      const { data } = await supabase
+      const supabaseClient = getSupabaseClient();
+      if (!supabaseClient) {
+        return [];
+      }
+      
+      const { data } = await supabaseClient
         .from('latest_news')
         .select('title, ai_summary, url, published_date')
         .order('published_date', { ascending: false })
@@ -709,7 +794,12 @@ async function getRelevantArticlesFallback(query) {
       `title.ilike.%${term}%, ai_summary.ilike.%${term}%`
     ).join(',');
 
-    const { data } = await supabase
+    const supabaseClient = getSupabaseClient();
+    if (!supabaseClient) {
+      return [];
+    }
+    
+    const { data } = await supabaseClient
       .from('latest_news')
       .select('title, ai_summary, url, published_date')
       .or(searchQuery)
@@ -718,7 +808,7 @@ async function getRelevantArticlesFallback(query) {
 
     // If no results, fallback to recent articles
     if (!data || data.length === 0) {
-      const { data: fallbackData } = await supabase
+      const { data: fallbackData } = await supabaseClient
         .from('latest_news')
         .select('title, ai_summary, url, published_date')
         .order('published_date', { ascending: false })

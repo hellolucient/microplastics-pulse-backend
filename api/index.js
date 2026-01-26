@@ -31,10 +31,25 @@ const app = express();
 // Initialize document processor
 const documentProcessor = new DocumentProcessor();
 
-// Initialize OpenAI client
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+// Lazy initialization for OpenAI client
+let openai = null;
+
+function getOpenAIClient() {
+  if (!process.env.OPENAI_API_KEY) {
+    return null;
+  }
+  if (!openai) {
+    try {
+      openai = new OpenAI({
+        apiKey: process.env.OPENAI_API_KEY,
+      });
+    } catch (error) {
+      console.warn('[API Index] Failed to initialize OpenAI client:', error.message);
+      return null;
+    }
+  }
+  return openai;
+}
 
 // Cosine similarity function for semantic search
 function cosineSimilarity(a, b) {
@@ -75,7 +90,13 @@ async function generateEmbedding(text) {
       console.log(`Text truncated from ${text.length} to ${textToEmbed.length} characters (${estimatedTokens} → ~${maxTokens} tokens)`);
     }
 
-    const response = await openai.embeddings.create({
+    const openaiClient = getOpenAIClient();
+    if (!openaiClient) {
+      console.warn('[API Index] OpenAI API key not configured, cannot generate embedding');
+      return null;
+    }
+    
+    const response = await openaiClient.embeddings.create({
       model: "text-embedding-3-small",
       input: textToEmbed,
     });
