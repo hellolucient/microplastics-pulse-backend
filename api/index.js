@@ -939,6 +939,34 @@ app.post('/api/batch-update-stories', async (req, res) => {
   }
 });
 
+// Endpoint to find articles missing AI summaries
+app.get('/api/find-missing-summaries', async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database client not available.' });
+  
+  try {
+    const { data: articles, error } = await supabase
+      .from('latest_news')
+      .select('id')
+      .is('ai_summary', null)
+      .order('created_at', { ascending: false })
+      .limit(100);
+    
+    if (error) throw error;
+    
+    const articleIds = articles ? articles.map(a => a.id) : [];
+    return res.status(200).json({ 
+      articleIds,
+      count: articleIds.length,
+      message: articleIds.length > 0 
+        ? `Found ${articleIds.length} articles missing AI summaries.`
+        : 'No articles found missing AI summaries.'
+    });
+  } catch (error) {
+    console.error('Error finding missing summaries:', error);
+    return res.status(500).json({ error: 'Failed to find missing summaries.', details: error.message });
+  }
+});
+
 // New endpoint specifically for articles missing ai_summary
 app.post('/api/batch-generate-summaries', async (req, res) => {
   if (!supabase) return res.status(503).json({ error: 'Database client not available.' });
