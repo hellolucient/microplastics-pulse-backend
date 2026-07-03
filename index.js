@@ -910,7 +910,12 @@ app.post('/api/batch-update-stories', async (req, res) => {
         updates.ai_summary = new_ai_summary;
         wasUpdated = true;
       }
-      const new_ai_image_url = await generateAndStoreImage(story.title, story.url);
+      let new_ai_image_url = null;
+      try {
+        new_ai_image_url = await generateAndStoreImage(story.title, story.url);
+      } catch (imageError) {
+        console.warn(`[batch-update-stories] Image generation failed for story ${story.id}:`, imageError.message);
+      }
       if (new_ai_image_url) {
         updates.ai_image_url = new_ai_image_url;
         wasUpdated = true;
@@ -1048,12 +1053,14 @@ app.post('/api/regenerate-image', async (req, res) => {
     if (fetchError) throw fetchError;
     if (!story) return res.status(404).json({ error: 'Story not found.' });
     const new_ai_image_url = await generateAndStoreImage(story.title, story.url);
-    if (!new_ai_image_url) return res.status(500).json({ error: 'Image generation failed.' });
+    if (!new_ai_image_url) {
+      return res.status(500).json({ error: 'Image generation failed.', details: 'Missing API credentials or prerequisites.' });
+    }
     const { error: updateError } = await supabase.from('latest_news').update({ ai_image_url: new_ai_image_url, processed_at: new Date().toISOString() }).eq('id', article_id);
     if (updateError) throw updateError;
     return res.status(200).json({ message: `Image regenerated successfully for story ID: ${article_id}.`, new_ai_image_url });
   } catch (error) {
-    return res.status(500).json({ error: 'Internal server error regenerating image.', details: error.message });
+    return res.status(500).json({ error: 'Image generation failed.', details: error.message });
   }
 });
 
@@ -1093,7 +1100,12 @@ app.post('/api/batch-generate-images', async (req, res) => {
       let wasUpdated = false;
 
       // Generate AI image
-      const new_ai_image_url = await generateAndStoreImage(story.title, story.url);
+      let new_ai_image_url = null;
+      try {
+        new_ai_image_url = await generateAndStoreImage(story.title, story.url);
+      } catch (imageError) {
+        console.warn(`[batch-generate-images] Image generation failed for story ${story.id}:`, imageError.message);
+      }
       if (new_ai_image_url) {
         updates.ai_image_url = new_ai_image_url;
         updates.processed_at = new Date().toISOString();

@@ -18,7 +18,7 @@ The project operates through a combination of automated fetching, AI processing,
 2.  **AI Content Enhancement:**
     *   For each new article identified:
         *   An **AI-generated summary** is created using OpenAI's GPT-3.5-turbo model to provide a concise overview.
-        *   An **AI-generated illustrative image** is created using OpenAI's DALL-E 3 model to visually represent the article's theme. The image prompt is designed to produce realistic, editorial-style photos without text or overly dramatic expressions.
+        *   An **AI-generated illustrative image** is created using OpenAI's gpt-image-1 model to visually represent the article's theme. The image prompt is designed to produce realistic, editorial-style photos without text or overly dramatic expressions.
 
 3.  **Storage:**
     *   Generated images are uploaded to and stored in **Vercel Blob storage**.
@@ -34,7 +34,7 @@ The project operates through a combination of automated fetching, AI processing,
 
 *   **Automated News Aggregation:** Regularly scans for new articles based on defined search terms.
 *   **AI-Generated Summaries:** Provides concise summaries of articles using GPT-3.5-turbo.
-*   **AI-Generated Images:** Creates unique, relevant images for articles using DALL-E 3.
+*   **AI-Generated Images:** Creates unique, relevant images for articles using gpt-image-1.
 *   **Admin Dashboard:** A secure area for project administrators to:
     *   **Manually Submit Articles:** Add specific URLs for processing.
     *   **Trigger Manual News Fetch:** Initiate the article fetching and processing cycle for each predefined search query, one by one.
@@ -112,7 +112,7 @@ microplastics-pulse-backend/
 *   **AI Services:**
     *   OpenAI API:
         *   GPT-3.5-turbo (for text summaries)
-        *   DALL-E 3 (for image generation)
+        *   gpt-image-1 (for image generation)
 *   **Database:**
     *   Supabase (PostgreSQL)
 *   **Image Storage:**
