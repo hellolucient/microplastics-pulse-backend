@@ -193,7 +193,7 @@ async function defaultUrlProcessor(url, subject) {
         return { status: 'summary_failed', url: finalUrl };
     }
 
-    const imageUrl = await generateAndStoreImage(subject, finalUrl);
+    const imageUrl = await generateAndStoreImage(subject, finalUrl, summary);
      if (!imageUrl) {
         console.warn('[UrlProcessor] Failed to generate image. Proceeding without one.');
     }

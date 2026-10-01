@@ -509,7 +509,7 @@ app.post('/api/add-news', async (req, res) => {
             }
 
             // Generate AI image
-            const ai_image_url = await generateAndStoreImage(articleData.title, articleData.link);
+            const ai_image_url = await generateAndStoreImage(articleData.title, articleData.link, ai_summary);
             if (!ai_image_url) {
                 return res.status(500).json({ 
                     error: 'AI image generation failed.',
@@ -915,7 +915,7 @@ app.post('/api/batch-update-stories', async (req, res) => {
       }
       let new_ai_image_url = null;
       try {
-        new_ai_image_url = await generateAndStoreImage(story.title, story.url);
+        new_ai_image_url = await generateAndStoreImage(story.title, story.url, new_ai_summary || story.ai_summary);
       } catch (imageError) {
         console.warn(`[batch-update-stories] Image generation failed for story ${story.id}:`, imageError.message);
       }
@@ -1102,7 +1102,7 @@ app.post('/api/generate-next-missing-image', async (req, res) => {
 
     let query = supabase
       .from('latest_news')
-      .select('id, title, url')
+      .select('id, title, url, ai_summary')
       .is('ai_image_url', null)
       .order('id', { ascending: true })
       .limit(1);
@@ -1130,7 +1130,7 @@ app.post('/api/generate-next-missing-image', async (req, res) => {
     let failureMessage = null;
 
     try {
-      newImageUrl = await generateAndStoreImage(story.title, story.url);
+      newImageUrl = await generateAndStoreImage(story.title, story.url, story.ai_summary);
       if (!newImageUrl) {
         failureMessage = 'Image generation returned no image.';
       }
@@ -1194,10 +1194,10 @@ app.post('/api/regenerate-image', async (req, res) => {
     return res.status(400).json({ error: 'Missing article_id.' });
   }
   try {
-    const { data: story, error: fetchError } = await supabase.from('latest_news').select('id, title, url').eq('id', article_id).single();
+    const { data: story, error: fetchError } = await supabase.from('latest_news').select('id, title, url, ai_summary').eq('id', article_id).single();
     if (fetchError) throw fetchError;
     if (!story) return res.status(404).json({ error: 'Story not found.' });
-    const new_ai_image_url = await generateAndStoreImage(story.title, story.url);
+    const new_ai_image_url = await generateAndStoreImage(story.title, story.url, story.ai_summary);
     if (!new_ai_image_url) {
       return res.status(500).json({ error: 'Image generation failed.', details: 'Missing API credentials or prerequisites.' });
     }
@@ -1247,7 +1247,7 @@ app.post('/api/batch-generate-images', async (req, res) => {
       // Generate AI image
       let new_ai_image_url = null;
       try {
-        new_ai_image_url = await generateAndStoreImage(story.title, story.url);
+        new_ai_image_url = await generateAndStoreImage(story.title, story.url, story.ai_summary);
       } catch (imageError) {
         console.warn(`[batch-generate-images] Image generation failed for story ${story.id}:`, imageError.message);
       }
