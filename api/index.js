@@ -1042,6 +1042,142 @@ app.post('/api/batch-generate-summaries', async (req, res) => {
   }
 });
 
+app.get('/api/find-missing-images', async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database client not available.' });
+
+  try {
+    const { count, error: countError } = await supabase
+      .from('latest_news')
+      .select('id', { count: 'exact', head: true })
+      .is('ai_image_url', null);
+
+    if (countError) throw countError;
+
+    const { data: articles, error } = await supabase
+      .from('latest_news')
+      .select('id, title')
+      .is('ai_image_url', null)
+      .order('id', { ascending: true })
+      .limit(1000);
+
+    if (error) throw error;
+
+    const articleIds = articles ? articles.map(article => article.id) : [];
+    const missingCount = count ?? articleIds.length;
+    return res.status(200).json({
+      articleIds,
+      count: missingCount,
+      message: missingCount > 0
+        ? `Found ${missingCount} articles missing AI images.`
+        : 'No articles found missing AI images.'
+    });
+  } catch (error) {
+    console.error('Error finding missing images:', error);
+    return res.status(500).json({ error: 'Failed to find missing images.', details: error.message });
+  }
+});
+
+// Generates exactly one missing image, then returns so the caller can wait and request the next.
+app.post('/api/generate-next-missing-image', async (req, res) => {
+  if (!supabase) return res.status(503).json({ error: 'Database client not available.' });
+
+  const afterId = req.body?.after_id || null;
+
+  try {
+    const { count, error: countError } = await supabase
+      .from('latest_news')
+      .select('id', { count: 'exact', head: true })
+      .is('ai_image_url', null);
+
+    if (countError) throw countError;
+
+    let query = supabase
+      .from('latest_news')
+      .select('id, title, url')
+      .is('ai_image_url', null)
+      .order('id', { ascending: true })
+      .limit(1);
+
+    if (afterId) {
+      query = query.gt('id', afterId);
+    }
+
+    const { data: stories, error } = await query;
+    if (error) throw error;
+
+    if (!stories || stories.length === 0) {
+      return res.status(200).json({
+        done: true,
+        remaining: count || 0,
+        result: null,
+        message: count > 0
+          ? 'No further articles to try in this pass.'
+          : 'No more stories to update.'
+      });
+    }
+
+    const story = stories[0];
+    let newImageUrl = null;
+    let failureMessage = null;
+
+    try {
+      newImageUrl = await generateAndStoreImage(story.title, story.url);
+      if (!newImageUrl) {
+        failureMessage = 'Image generation returned no image.';
+      }
+    } catch (imageError) {
+      failureMessage = imageError.message;
+      console.warn(`[generate-next-missing-image] Image generation failed for story ${story.id}:`, failureMessage);
+    }
+
+    if (!newImageUrl) {
+      return res.status(200).json({
+        done: false,
+        remaining: count || 0,
+        result: {
+          id: story.id,
+          title: story.title,
+          success: false,
+          message: failureMessage || 'Failed to generate image'
+        }
+      });
+    }
+
+    const { error: updateError } = await supabase
+      .from('latest_news')
+      .update({ ai_image_url: newImageUrl, processed_at: new Date().toISOString() })
+      .eq('id', story.id);
+
+    if (updateError) {
+      return res.status(200).json({
+        done: false,
+        remaining: count || 0,
+        result: {
+          id: story.id,
+          title: story.title,
+          success: false,
+          message: updateError.message
+        }
+      });
+    }
+
+    return res.status(200).json({
+      done: false,
+      remaining: Math.max((count || 1) - 1, 0),
+      result: {
+        id: story.id,
+        title: story.title,
+        success: true,
+        updates: ['ai_image_url'],
+        ai_image_url: newImageUrl
+      }
+    });
+  } catch (error) {
+    console.error('[generate-next-missing-image] Unexpected error:', error);
+    return res.status(500).json({ error: 'Internal server error processing image.', details: error.message });
+  }
+});
+
 app.post('/api/regenerate-image', async (req, res) => {
   if (!supabase) return res.status(503).json({ error: 'Database client not available.' });
   const { article_id } = req.body;
