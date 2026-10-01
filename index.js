@@ -140,7 +140,9 @@ const allowedOrigins = [
   'https://microplasticswatch.com',
   'http://localhost:3000',
   'http://localhost:5173',
-  /https:\/\/microplastics-pulse-frontend.*\\.vercel\\.app$/
+  'https://microplastics-pulse-backend-production.up.railway.app',
+  /https:\/\/microplastics-pulse-frontend.*\\.vercel\\.app$/,
+  /https:\/\/microplastics-pulse-backend.*\.up\.railway\.app$/
 ];
 
 app.use(cors({
