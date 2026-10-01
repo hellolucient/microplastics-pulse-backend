@@ -22,6 +22,7 @@ const {
   summarizeText,
   generateAndStoreImage
 } = require('../lib/coreLogic');
+const missingImagesPage = require('../lib/missingImagesPage');
 
 // Add chat routes
 const chatRoutes = require('./admin/chat');
@@ -1040,6 +1041,12 @@ app.post('/api/batch-generate-summaries', async (req, res) => {
   } catch (error) {
     return res.status(500).json({ error: 'Internal server error processing batch.', details: error.message });
   }
+});
+
+app.get('/admin/missing-images', (req, res) => {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.setHeader('Cache-Control', 'no-store');
+  res.status(200).send(missingImagesPage);
 });
 
 app.get('/api/find-missing-images', async (req, res) => {
